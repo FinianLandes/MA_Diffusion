@@ -118,3 +118,14 @@ def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples:
         x_pred = model.decode(z).cpu().numpy() 
     logger.light_debug(f"Created samples: {x_pred.shape}")
     return x_pred
+
+def fwd_pass(model: VAE, device: str, sample: Tensor = None) -> ndarray:
+    model.eval()
+    logger.light_debug("Started passthrough")
+    with torch.no_grad():
+        mean, logvar = model.encode(sample.to(device))
+        z = model.reparam(mean, logvar)
+        x = model.decode(z)
+    x = x.cpu().numpy() 
+    logger.light_debug(f"Created samples: {x.shape}")
+    return x
