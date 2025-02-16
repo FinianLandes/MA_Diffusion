@@ -18,6 +18,7 @@ learning_rate: float = 1e-6
 reprod_loss_weight: float = 1000
 logging_level: int = LIGHT_DEBUG
 
+
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -31,5 +32,5 @@ model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, file.
 optimizer = optim.Adam(model.parameters(), lr=1e-5)
 train_VAE(model, data_loader, optimizer, loss_VAE, epochs=epochs, device=device, reprod_loss_weight=reprod_loss_weight)
 
-torch.save(model.state_dict(), "Models/audio_vae_v1.pth")
+torch.save(model.state_dict(), "Models/audio_vae_v1_small.pth")
 logger.info("Model saved successfully.")
