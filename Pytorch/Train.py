@@ -32,5 +32,5 @@ model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, file.
 optimizer = optim.Adam(model.parameters(), lr=1e-5)
 train_VAE(model, data_loader, optimizer, loss_VAE, epochs=epochs, device=device, reprod_loss_weight=reprod_loss_weight)
 
-torch.save(model.state_dict(), "Models/audio_vae_v1_small.pth")
+torch.save(model.state_dict(), "Models/audio_vae_v1.pth")
 logger.info("Model saved successfully.")
