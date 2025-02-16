@@ -37,13 +37,16 @@ def load_spectogram(path: str) -> ndarray:
 def save_spectogram(spectogram: ndarray, path: str) -> ndarray:
     np.savez_compressed(path, stft=spectogram)
     logger.light_debug(f"Saved spectogram to:{path}")
+
 def save_training_data(data: ndarray, path: str) -> None:
     np.save(path, data)
     logger.light_debug(f"Saved ndarray to:{path}")
+
 def load_training_data(path: str) -> ndarray:
-    data = np.load(path)
+    data: ndarray= np.load(path)
     logger.light_debug(f"Ndarray loaded from {path} of shape: {data.shape}")
     return data
+
 def save_audio_file(audio: ndarray, path: str, sample_rate: int = 44100) -> None:
     wavfile.write(path, sample_rate, audio)
     logger.light_debug(f"Saved file to:{path}")
@@ -125,12 +128,13 @@ def unnormalize(data: ndarray, min_val: float = -65, max_val: float = 55) -> nda
     logger.light_debug(f"Unnormalized to range: [{min_val},{max_val}]")
     return normalized_data
 
-def dimesion_for_VAE(data: ndarray) -> ndarray:
+def dimension_for_VAE(data: ndarray) -> ndarray:
     if data.shape[-1] % 32 != 0:
         data = data[...,:(data.shape[-1] // 32) * 32]
     if data.shape[-2] % 32 != 0:
         data = data[...,:(data.shape[-2] // 32) * 32, :]
     return data
+
 def dimension_for_spec_to_audio(spec: ndarray, len_fft: int = 4096) -> ndarray:
     if spec.shape[0] != (len_fft // 2 + 1):
         spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')

@@ -49,7 +49,9 @@ class VAE(nn.Module):
 
     def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
         x = self.encoder(x)
+        print(x.shape)
         x = self.flatten(x)
+        print(x.shape)
         mean, logvar = self.hid_mean(x), self.hid_var(x)
         return mean, logvar
     
@@ -70,13 +72,13 @@ class VAE(nn.Module):
         x_pred = self.decode(z)
         return x_pred, mean, var
 
-def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor) -> Tensor:
+def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor, alpha: float) -> Tensor:
     reprod_loss = torch.sqrt(nn.functional.mse_loss(x_pred, x, reduction="sum"))
     eps = 1e-8
     KL = -0.5 * torch.sum(1 + logvar - mean.pow(2) - (logvar + eps).exp())
-    return reprod_loss + KL
+    return alpha * reprod_loss + KL
 
-def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str) -> float:    
+def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float) -> float:    
     model.train()
     logger.info(f"Training started on {device}")
     
@@ -87,7 +89,7 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
             x: Tensor = x.to(device)
             x = x.unsqueeze(1)
             x_pred, mean, logvar = model(x)
-            loss: torch.Tensor = loss_function(x, x_pred, mean, logvar)
+            loss: torch.Tensor = loss_function(x, x_pred, mean, logvar, reprod_loss_weight)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -111,10 +113,10 @@ def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples:
         if sample is not None:
             mean, var = model.encode(sample.to(device))
             std = torch.exp(0.5 * var)
-            eps = torch.randn((num_samples,) + mean.shape, device=device)  # Sampling noise
-            z = mean.unsqueeze(0) + eps * std.unsqueeze(0)  # Reparameterization trick
+            eps = torch.randn((num_samples,) + mean.shape, device=device)
+            z = mean.unsqueeze(0) + eps * std.unsqueeze(0)
         else:
             z = torch.randn((num_samples, model.hid_mean.out_features), device=device)
         x_pred = model.decode(z).cpu().numpy() 
-        logger.light_debug(f"Created samples: {x_pred.shape}")
+    logger.light_debug(f"Created samples: {x_pred.shape}")
     return x_pred
