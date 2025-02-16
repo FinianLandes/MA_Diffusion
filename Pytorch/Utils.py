@@ -145,7 +145,7 @@ class Audio_Data(Dataset):
         self.data = torch.tensor(data, dtype=dtype)
         if labels != None:
             self.labels = torch.tensor(labels, dtype=dtype)
-        else: 
+        else:
             self.labels = torch.tensor(data, dtype=dtype)
     def __len__(self):
         return len(self.data)

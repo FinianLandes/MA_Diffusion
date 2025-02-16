@@ -49,9 +49,7 @@ class VAE(nn.Module):
 
     def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
         x = self.encoder(x)
-        print(x.shape)
         x = self.flatten(x)
-        print(x.shape)
         mean, logvar = self.hid_mean(x), self.hid_var(x)
         return mean, logvar
     

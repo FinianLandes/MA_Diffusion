@@ -21,7 +21,7 @@ logging_level: int = LIGHT_DEBUG
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
 
-file = load_training_data(DATA_PATH + "/training_v1.npy")[:100, ...]
+file = load_training_data(DATA_PATH + "/training_v1.npy")[:2080, ...]
 data_loader = create_dataloader(Audio_Data(file), batch_size)
 logger.info(f"Data loaded with shape: {file.shape}")
 
