@@ -70,38 +70,43 @@ class VAE(nn.Module):
         x_pred = self.decode(z)
         return x_pred, mean, var
 
-def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor, alpha: float) -> Tensor:
+def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor, alpha: float) -> tuple[Tensor, Tensor, Tensor]:
     reprod_loss = torch.sqrt(nn.functional.mse_loss(x_pred, x, reduction="sum"))
     eps = 1e-8
     KL = -0.5 * torch.sum(1 + logvar - mean.pow(2) - (logvar + eps).exp())
-    return alpha * reprod_loss + KL
+    return alpha * reprod_loss + KL, reprod_loss, KL
 
 def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float) -> float:    
     model.train()
     logger.info(f"Training started on {device}")
-    
     for e in range(epochs):
         total_loss: float = 0
+        total_reprod: float = 0
+        total_KL: float = 0
         start_time: float = time.time()
         for batch_idx, (x, _) in enumerate(data_loader):
             x: Tensor = x.to(device)
             x = x.unsqueeze(1)
             x_pred, mean, logvar = model(x)
-            loss: torch.Tensor = loss_function(x, x_pred, mean, logvar, reprod_loss_weight)
+            loss, reprod_loss, KL = loss_function(x, x_pred, mean, logvar, reprod_loss_weight)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
+            total_reprod += reprod_loss.item()
+            total_KL += KL.item()
             if logger.getEffectiveLevel() == LIGHT_DEBUG:
                 print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {batch_idx + 1:02d}/{len(data_loader):02d}", end='')
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print()
 
         avg_loss = total_loss / len(data_loader.dataset)
+        avg_reprod = total_reprod / len(data_loader.dataset)
+        avg_KL = total_KL / len(data_loader.dataset)
         epoch_time = time.time() - start_time
         remaining_time = int(epoch_time * (epochs - e - 1))
 
-        logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s")
+        logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Avg. Reprod: {avg_reprod:.5e} Avg. KL: {avg_KL:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s")
     return total_loss
 
 def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1) -> ndarray:
