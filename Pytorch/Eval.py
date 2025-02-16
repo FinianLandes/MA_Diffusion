@@ -20,19 +20,19 @@ logger: logging.Logger = logging.getLogger(__name__)
 def generate_data(model: nn.Module, n_samples: int = 1, seed: ndarray = None, file_name: str = "test") -> None:
     model.eval()
     if seed is not None:
-        save_audio_file(spectrogram_to_audio(seed, LEN_FFT), f"{RESULT_PATH}/{file_name}_seed.wav")
+        save_audio_file(unnormalize(spectrogram_to_audio(seed, LEN_FFT)), f"{RESULT_PATH}/{file_name}_seed.wav")
         samples = generate_sample(model, device, Tensor(seed).view(1, 1, seed.shape[-2], seed.shape[-1]), num_samples=n_samples)
     else:
         samples = generate_sample(model, device, num_samples=n_samples)
     for i in range(samples.shape[1]):
-        save_audio_file(spectrogram_to_audio(samples[0,i], LEN_FFT), f"{RESULT_PATH}/{file_name}_{i:02d}.wav", SAMPLE_RATE)
+        save_audio_file(unnormalize(spectrogram_to_audio(samples[0,i], LEN_FFT)), f"{RESULT_PATH}/{file_name}_{i:02d}.wav", SAMPLE_RATE)
     logger.light_debug(f"Saved {samples.shape[0]} samples to {RESULT_PATH}")
 
 
 def pass_through(sample: ndarray, file_name: str = "test") -> None:
-    save_audio_file(spectrogram_to_audio(file[100], LEN_FFT), f"{RESULT_PATH}/{file_name}_inp.wav")
+    save_audio_file(unnormalize(spectrogram_to_audio(file[100], LEN_FFT)), f"{RESULT_PATH}/{file_name}_inp.wav")
     x = fwd_pass(model, device, Tensor(sample).view(1, 1, sample.shape[-2], sample.shape[-1]))
-    save_audio_file(spectrogram_to_audio(x[0,0], LEN_FFT), f"{RESULT_PATH}/{file_name}_out.wav")
+    save_audio_file(unnormalize(spectrogram_to_audio(x[0,0], LEN_FFT)), f"{RESULT_PATH}/{file_name}_out.wav")
     logger.light_debug(f"Saved passed through sample to {RESULT_PATH}")
 
 file = load_training_data(f"{DATA_PATH}/{training_data_name}.npy")

@@ -12,18 +12,20 @@ from VAE import *
 from Utils import *
 from Conf import *
 
-batch_size: int = 32
-epochs: int = 20
+batch_size: int = 2
+epochs: int = 300
 learning_rate: float = 1e-6
 reprod_loss_weight: float = 1000
 logging_level: int = LIGHT_DEBUG
-model_name: str = "audio_vae_v1"
+model_name: str = "audio_vae_v1_small"
+training_data_name: str = "training_v1"
 
 
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
 
-file = load_training_data(DATA_PATH + "/training_v1.npy")[:2080, ...]
+file = load_training_data(f"{DATA_PATH}/{training_data_name}.npy")[:6, ...]
+print(np.max(file))
 data_loader = create_dataloader(Audio_Data(file), batch_size)
 logger.info(f"Data loaded with shape: {file.shape}")
 

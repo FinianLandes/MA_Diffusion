@@ -19,6 +19,7 @@ for i in range(len(filenames)):
     file = load_audio_file(os.path.join(DATA_PATH, filenames[i]), SAMPLE_RATE, True)
     file = split_audiofile(file, TIME_FRAME_S, SAMPLE_RATE)
     file = audio_splits_to_spectograms(file, LEN_FFT)
+    file = normalize(file)
     data.append(file)
 data: ndarray = np.vstack(data)
 data = dimension_for_VAE(data)
