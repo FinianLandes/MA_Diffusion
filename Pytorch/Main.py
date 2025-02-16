@@ -8,7 +8,6 @@ import numpy as np
 from numpy import ndarray
 import logging
 import os
-from torch_lr_finder import LRFinder
 # Base Scripts
 from VAE import *
 from Utils import *

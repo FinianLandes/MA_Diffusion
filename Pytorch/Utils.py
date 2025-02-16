@@ -90,6 +90,8 @@ def audio_splits_to_spectograms(audio: ndarray, len_fft: int = 4096, log: bool =
 
 def spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, log: bool = True) -> ndarray:
     logger.light_debug("Started GL")
+    if spec.shape[0] != len_fft // 2 + 1:
+        spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
     if log:
         spec = librosa.db_to_amplitude(spec)
     audio: ndarray = librosa.griffinlim(spec, n_fft=len_fft)
@@ -116,6 +118,17 @@ def unnormalize(data: ndarray, min_val: float = -65, max_val: float = 55) -> nda
     normalized_data: ndarray = scaled_data * (max_val - min_val) + min_val
     logger.light_debug(f"Unnormalized to range: [{min_val},{max_val}]")
     return normalized_data
+
+def dimesion_for_VAE(data: ndarray) -> ndarray:
+    if data.shape[-1] % 32 != 0:
+        data = data[...,:(data.shape[-1] // 32) * 32]
+    if data.shape[-2] % 32 != 0:
+        data = data[...,:(data.shape[-2] // 32) * 32, :]
+    return data
+def dimension_for_spec_to_audio(spec: ndarray, len_fft: int = 4096) -> ndarray:
+    if spec.shape[0] != (len_fft // 2 + 1):
+        spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
+    return spec
 
 class Audio_Data(Dataset):
     def __init__(self, data: ndarray, labels: ndarray = None, dtype: torch.dtype = torch.float32) -> None:

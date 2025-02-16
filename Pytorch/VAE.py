@@ -71,8 +71,9 @@ class VAE(nn.Module):
         return x_pred, mean, var
 
 def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor) -> Tensor:
-    reprod_loss = nn.functional.mse_loss(x_pred, x, reduction="sum")  
-    KL = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp()) 
+    reprod_loss = torch.sqrt(nn.functional.mse_loss(x_pred, x, reduction="sum"))
+    eps = 1e-8
+    KL = -0.5 * torch.sum(1 + logvar - mean.pow(2) - (logvar + eps).exp())
     return reprod_loss + KL
 
 def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str) -> float:    
@@ -91,7 +92,10 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-            logger.light_debug(f"Batch {batch_idx + 1:02d}/{len(data_loader)}")
+            if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {batch_idx + 1:02d}/{len(data_loader):02d}", end='')
+        if logger.getEffectiveLevel() == LIGHT_DEBUG:
+            print()
 
         avg_loss = total_loss / len(data_loader.dataset)
         epoch_time = time.time() - start_time
@@ -102,14 +106,15 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
 
 def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1) -> ndarray:
     model.eval()
+    logger.light_debug("Started creating samples")
     with torch.no_grad():
         if sample is not None:
             mean, var = model.encode(sample.to(device))
             std = torch.exp(0.5 * var)
-            eps = torch.randn((num_samples,) + mean.shape, device=device)
-            z = mean.unsqueeze(0) + eps * std.unsqueeze(0)
+            eps = torch.randn((num_samples,) + mean.shape, device=device)  # Sampling noise
+            z = mean.unsqueeze(0) + eps * std.unsqueeze(0)  # Reparameterization trick
         else:
             z = torch.randn((num_samples, model.hid_mean.out_features), device=device)
-
-    output = model.decoder(z).detach().numpy()
-    return output
+        x_pred = model.decode(z).cpu().numpy() 
+        logger.light_debug(f"Created samples: {x_pred.shape}")
+    return x_pred
