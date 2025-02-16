@@ -11,7 +11,8 @@ import logging, os
 from VAE import *
 from Utils import *
 from Conf import *
-
+model_name: str = "audio_vae_v1"
+training_data_name: str = "training_v1"
 logging_level: int = LIGHT_DEBUG
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
@@ -27,12 +28,12 @@ def generate_data(model: nn.Module, n_samples: int = 1, seed: ndarray = None, fi
         save_audio_file(spectrogram_to_audio(samples[0,i], LEN_FFT), f"{RESULT_PATH}/{file_name}_{i:02d}.wav", SAMPLE_RATE)
     logger.light_debug(f"Saved {samples.shape[0]} samples to {RESULT_PATH}")
 
-file = load_training_data(DATA_PATH+"/training_v1.npy")
+file = load_training_data(f"{DATA_PATH}/{training_data_name}.npy")
 logger.info(f"Data loaded with shape: {file.shape}")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, file.shape[-2], file.shape[-1]]).to(device)
-model.load_state_dict(torch.load("Models/audio_vae_v1.pth"))
+model.load_state_dict(torch.load(f"{MODEL_PATH}/{model_name}.pth"))
 
 generate_data(model=model, seed=file[100])
 
