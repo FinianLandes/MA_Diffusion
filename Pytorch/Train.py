@@ -13,11 +13,13 @@ from Utils import *
 from Conf import *
 
 batch_size: int = 2
-epochs: int = 300
-learning_rate: float = 1e-6
-reprod_loss_weight: float = 1000
+epochs: int = 200
+learning_rate: float = 1e-5
+lr_decay: int = 40
+lr_gamma: float = 0.1
+reprod_loss_weight: float = 5000
 logging_level: int = LIGHT_DEBUG
-model_name: str = "audio_vae_v1_small"
+model_name: str = "audio_vae_v2_small"
 training_data_name: str = "training_v1"
 
 
@@ -25,7 +27,6 @@ logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %
 logger: logging.Logger = logging.getLogger(__name__)
 
 file = load_training_data(f"{DATA_PATH}/{training_data_name}.npy")[:6, ...]
-print(np.max(file))
 data_loader = create_dataloader(Audio_Data(file), batch_size)
 logger.info(f"Data loaded with shape: {file.shape}")
 
@@ -35,6 +36,7 @@ model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, file.
 if os.path.exists(f"{MODEL_PATH}/{model_name}.pth"):
     model.load_state_dict(torch.load(f"{MODEL_PATH}/{model_name}.pth"))
 optimizer = optim.Adam(model.parameters(), lr=1e-5)
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
 train_VAE(model, data_loader, optimizer, loss_VAE, epochs=epochs, device=device, reprod_loss_weight=reprod_loss_weight)
 
 torch.save(model.state_dict(), f"{MODEL_PATH}/{model_name}.pth")

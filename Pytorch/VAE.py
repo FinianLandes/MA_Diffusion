@@ -74,7 +74,7 @@ def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor, alpha: flo
     reprod_loss = torch.sqrt(nn.functional.mse_loss(x_pred, x, reduction="sum"))
     eps = 1e-8
     KL = -0.5 * torch.sum(1 + logvar - mean.pow(2) - (logvar + eps).exp())
-    return alpha * reprod_loss + KL, reprod_loss, KL
+    return alpha * reprod_loss + KL, reprod_loss * alpha, KL
 
 def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float) -> float:    
     model.train()
