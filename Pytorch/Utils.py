@@ -37,7 +37,13 @@ def load_spectogram(path: str) -> ndarray:
 def save_spectogram(spectogram: ndarray, path: str) -> ndarray:
     np.savez_compressed(path, stft=spectogram)
     logger.light_debug(f"Saved spectogram to:{path}")
-
+def save_training_data(data: ndarray, path: str) -> None:
+    np.save(path, data)
+    logger.light_debug(f"Saved ndarray to:{path}")
+def load_training_data(path: str) -> ndarray:
+    data = np.load(path)
+    logger.light_debug(f"Ndarray loaded from {path} of shape: {data.shape}")
+    return data
 def save_audio_file(audio: ndarray, path: str, sample_rate: int = 44100) -> None:
     wavfile.write(path, sample_rate, audio)
     logger.light_debug(f"Saved file to:{path}")

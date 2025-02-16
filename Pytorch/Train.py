@@ -6,34 +6,27 @@ import torch.optim as optim
 # Utils
 import numpy as np
 from numpy import ndarray
-import logging
-import os
+import logging, os
 # Base Scripts
 from VAE import *
 from Utils import *
+from Conf import *
 
-sample_rate: int = 44100
 batch_size: int = 32
 epochs: int = 20
-data_path: str = "Data"
 logging_level: int = LIGHT_DEBUG
 
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
-logger: logging.    Logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
-
-filenames = get_filenames_from_folder(data_path, "wav")
-file = load_audio_file(os.path.join(data_path, filenames[1]), sample_rate, True)
-file = split_audiofile(file, 8, sample_rate)
-file = audio_splits_to_spectograms(file, 2048)
-file = dimesion_for_VAE(file)
+file = load_training_data(DATA_PATH+"/training_v1.npy")
 data_loader = create_dataloader(Audio_Data(file), batch_size)
 logger.info(f"Data loaded with shape: {file.shape}")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, 1024, 690]).to(device)
+model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, file.shape[-2], file.shape[-1]]).to(device)
 
 optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
