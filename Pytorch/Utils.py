@@ -59,11 +59,22 @@ def get_filenames_from_folder(path: str, filetype: str = None) -> list:
     return files
 
 # Other Manipulations
-def split_audiofile(audio: ndarray, time: int, sample_rate: int = 44100) -> ndarray:
+def split_audiofile(audio: ndarray, time: int, sample_rate: int = 44100, overlap_s: int = 0) -> ndarray:
     samples: int = sample_rate * time
-    pad: int = len(audio) % samples
-    audio = np.pad(audio, (0, samples - pad))
-    data = np.array(np.split(audio, len(audio) // samples))
+    samples_overlap: int = sample_rate * overlap_s
+    if overlap_s == 0:
+        pad: int = len(audio) % samples
+        audio = np.pad(audio, (0, samples - pad))
+        data = np.array(np.split(audio, len(audio) // samples))
+    else:
+        data: list = []
+        for i in range(0, audio.shape[0] - samples + 1, samples - samples_overlap):
+            split: ndarray = audio[i: i + samples]
+            if split.shape[0] != samples:
+                split = np.pad(split, (0, samples - split.shape[0]))
+            data.append(split)
+        data = np.array(data)
+
     logger.light_debug(f"Split audio to: {data.shape}")
     return data
 
