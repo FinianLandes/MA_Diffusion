@@ -151,6 +151,13 @@ def dimension_for_spec_to_audio(spec: ndarray, len_fft: int = 4096) -> ndarray:
         spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
     return spec
 
+def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch", y_label: str = "Lr", color: str = "blue") -> None:
+    if data_y is None:
+        data_y = np.arange(len(data_x))
+    plt.scatter(data_x, data_y, c=color)
+    plt.xlabel = x_label
+    plt.ylabel = y_label
+    plt.show()
 class Audio_Data(Dataset):
     def __init__(self, data: ndarray, labels: ndarray = None, dtype: torch.dtype = torch.float32) -> None:
         self.data = torch.tensor(data, dtype=dtype)
