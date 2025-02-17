@@ -11,7 +11,7 @@ import logging, os
 from VAE import *
 from Utils import *
 from Conf import *
-model_name: str = "audio_vae_v2_small"
+model_name: str = "audio_vae_v3_small"
 training_data_name: str = "training_v1"
 logging_level: int = LIGHT_DEBUG
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
