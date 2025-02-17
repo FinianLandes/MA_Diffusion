@@ -120,7 +120,7 @@ def normalize(data: ndarray, min_val: float = 0, max_val: float = 1) -> ndarray:
     logger.light_debug(f"Normalized to range: [{min_val},{max_val}]")
     return normalized_data
 
-def unnormalize(data: ndarray, min_val: float = -65, max_val: float = 55) -> ndarray:
+def unnormalize(data: ndarray, min_val: float = -50, max_val: float = 50) -> ndarray:
     min_data: float = np.min(data)
     max_data: float = np.max(data)
     scaled_data: ndarray = (data - min_data) / (max_data - min_data)

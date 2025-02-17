@@ -79,6 +79,7 @@ def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor, alpha: flo
 def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float) -> float:    
     model.train()
     logger.info(f"Training started on {device}")
+    total_time: float = 0
     for e in range(epochs):
         total_loss: float = 0
         total_reprod: float = 0
@@ -104,7 +105,8 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
         avg_reprod = total_reprod / len(data_loader.dataset)
         avg_KL = total_KL / len(data_loader.dataset)
         epoch_time = time.time() - start_time
-        remaining_time = int(epoch_time * (epochs - e - 1))
+        total_time += epoch_time
+        remaining_time = int((total_time / (e + 1)) * (epochs - e - 1))
 
         logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Avg. Reprod: {avg_reprod:.5e} Avg. KL: {avg_KL:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s")
     return total_loss
