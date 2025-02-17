@@ -80,6 +80,7 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
     model.train()
     logger.info(f"Training started on {device}")
     total_time: float = 0
+    loss_list: list = []
     for e in range(epochs):
         total_loss: float = 0
         total_reprod: float = 0
@@ -109,7 +110,8 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
         remaining_time = int((total_time / (e + 1)) * (epochs - e - 1))
 
         logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Avg. Reprod: {avg_reprod:.5e} Avg. KL: {avg_KL:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s")
-    return total_loss
+        loss_list.append(avg_loss)
+    return loss_list
 
 def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1) -> ndarray:
     model.eval()
