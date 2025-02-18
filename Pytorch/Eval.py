@@ -12,7 +12,7 @@ from VAE import *
 from Utils import *
 from Conf import *
 model_name: str = "audio_vae_v3_small"
-training_data_name: str = "training_v1"
+training_data_name: str = "training_v2"
 logging_level: int = LIGHT_DEBUG
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
@@ -42,4 +42,4 @@ model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, file.
 model.load_state_dict(torch.load(f"{MODEL_PATH}/{model_name}.pth"))
 
 #generate_data(model=model, seed=file[100])
-pass_through(file[3])
+pass_through(file[40])

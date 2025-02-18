@@ -12,27 +12,27 @@ from VAE import *
 from Utils import *
 from Conf import *
 
-batch_size: int = 2
-epochs: int = 200
-learning_rate: float = 1e-6
+batch_size: int = 1
+epochs: int = 300
+learning_rate: float = 5e-4
 lr_decay: int = 40
 lr_gamma: float = 0.1
 reprod_loss_weight: float = 20000
 logging_level: int = logging.INFO
-model_name: str = "audio_vae_v3_small"
-training_data_name: str = "training_v1"
+model_name: str = "audio_vae_v4_bigger_lat"
+training_data_name: str = "training_v2"
 
 
 logging.basicConfig(level=logging_level, format='%(asctime)s - %(levelname)s - %(message)s')
 logger: logging.Logger = logging.getLogger(__name__)
 
-file = load_training_data(f"{DATA_PATH}/{training_data_name}.npy")[:20, ...]
+file = load_training_data(f"{DATA_PATH}/{training_data_name}.npy")[40, ...].reshape(1, 1024,672)
 data_loader = create_dataloader(Audio_Data(file), batch_size)
 logger.info(f"Data loaded with shape: {file.shape}")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = VAE(in_channels=1, latent_dim=512, device=device,input_shape=[0,0, file.shape[-2], file.shape[-1]]).to(device)
+model = VAE(in_channels=1, latent_dim=1024, device=device,input_shape=[0,0, file.shape[-2], file.shape[-1]]).to(device)
 if os.path.exists(f"{MODEL_PATH}/{model_name}.pth"):
     model.load_state_dict(torch.load(f"{MODEL_PATH}/{model_name}.pth"))
 optimizer = optim.Adam(model.parameters(), lr=1e-5)
