@@ -9,6 +9,89 @@ import time
 from Utils import *
 
 logger = logging.getLogger(__name__)
+class ResBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, downsample: bool = False, activation = nn.GELU()) -> None:
+        super(ResBlock, self).__init__()
+        self.activation = activation
+        stride: int = 2 if downsample else 1
+
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        
+        self.skip = nn.Sequential()
+        if in_channels != out_channels or downsample:
+            self.skip = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x: Tensor) -> Tensor:
+        identity = self.skip(x)
+        out = self.activation(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += identity
+        return self.activation(out)
+class ResVAE(nn.Module):
+    def __init__(self, in_channels: int, latent_dim: int, device: str, activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 0, 2048, 128]) -> None:
+        super(ResVAE, self).__init__()
+        self.max_channels: int = 256
+        self.activation = activation
+        self.device = device
+        self.input_shape = input_shape
+        self.latent_dim = latent_dim
+        # Encoder
+        self.encoder = nn.Sequential(
+            ResBlock(in_channels, self.max_channels // 8, downsample=True),  # -> B, 64, H/2, W/2
+            ResBlock(self.max_channels // 8, self.max_channels // 4, downsample=True, activation=self.activation),   # -> B, 128, H/4, W/4
+            ResBlock(self.max_channels // 4, self.max_channels // 2, downsample=True, activation=self.activation),  # -> B, 256, H/8, W/8
+            ResBlock(self.max_channels // 2, self.max_channels, downsample=True, activation=self.activation),  # -> B, 512, H/16, W/16
+        )
+        self.encoded_h, self.encoded_w = input_shape[-1] // 16,  input_shape[-2] // 16
+        self.flattened_size = self.max_channels * self.encoded_h * self.encoded_w
+        self.flatten = nn.Flatten()
+        self.hid_mean = nn.Linear(self.flattened_size, latent_dim)
+        self.hid_logvar = nn.Linear(self.flattened_size, latent_dim)
+
+        self.fc_decode = nn.Linear(latent_dim, self.flattened_size)
+
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(self.max_channels, self.max_channels // 2, kernel_size=4, stride=2, padding=1),  # -> B, 256, H/8, W/8
+            self.activation,
+            ResBlock(self.max_channels // 2, self.max_channels // 4, activation=self.activation),  # -> B, 128, H/8, W/8
+            nn.ConvTranspose2d(self.max_channels // 4, self.max_channels // 8, kernel_size=4, stride=2, padding=1),  # -> B, 64, H/4, W/4
+            self.activation,
+            ResBlock(self.max_channels // 8, self.max_channels // 16, activation=self.activation),  # -> B, 32, H/4, W/4
+            nn.ConvTranspose2d(self.max_channels // 16, self.max_channels // 32, kernel_size=4, stride=2, padding=1),  # -> B, 16, H/2, W/2
+            self.activation,
+            ResBlock(self.max_channels // 32, self.max_channels // 64, activation=self.activation),  # -> B, 8, H/2, W/2
+            nn.ConvTranspose2d(self.max_channels // 64, in_channels, kernel_size=4, stride=2, padding=1),  # -> B, in_channels, H, W
+            nn.Sigmoid()  # Normalize output to [0,1]
+        )
+
+    def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        x = self.encoder(x)
+        x = self.flatten(x)
+        mean, logvar = self.hid_mean(x), self.hid_logvar(x)
+        return mean, logvar
+    
+    def reparam(self, mean: Tensor, logvar: Tensor) -> Tensor:
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std) 
+        return mean + eps * std
+    
+    def decode(self, z: Tensor) -> Tensor:
+        x: Tensor = self.fc_decode(z)
+        x = x.view(-1, self.max_channels, self.encoded_w, self.encoded_h) 
+        x = self.decoder(x)
+        return x
+    
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        mean, var = self.encode(x)
+        z = self.reparam(mean, var)
+        x_pred = self.decode(z)
+        return x_pred, mean, var
 
 class VAE(nn.Module):
     def __init__(self, in_channels: int, latent_dim: int, device: str, activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 0, 2048, 128]) -> None:
@@ -45,7 +128,6 @@ class VAE(nn.Module):
             nn.ConvTranspose2d(32, in_channels, kernel_size=4, stride=2, padding=1), # -> B, 1, H, W
             nn.Sigmoid()
         )
-
 
     def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
         x = self.encoder(x)
