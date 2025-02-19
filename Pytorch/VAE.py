@@ -9,125 +9,63 @@ import time
 from Utils import *
 
 logger = logging.getLogger(__name__)
-class ResBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, downsample: bool = False, activation = nn.GELU()) -> None:
-        super(ResBlock, self).__init__()
-        self.activation = activation
-        stride: int = 2 if downsample else 1
-
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_channels)
-        
-        self.skip = nn.Sequential()
-        if in_channels != out_channels or downsample:
-            self.skip = nn.Sequential(
-                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_channels)
-            )
-
+class ConvDown(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, activation):
+        super(ConvDown, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1),
+            activation,
+            nn.MaxPool2d(kernel_size=4, stride=2, padding=1)
+        )
     def forward(self, x: Tensor) -> Tensor:
-        identity = self.skip(x)
-        out = self.activation(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        out += identity
-        return self.activation(out)
-class ResVAE(nn.Module):
-    def __init__(self, in_channels: int, latent_dim: int, device: str, activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 0, 2048, 128]) -> None:
-        super(ResVAE, self).__init__()
-        self.max_channels: int = 256
-        self.activation = activation
-        self.device = device
-        self.input_shape = input_shape
-        self.latent_dim = latent_dim
-        # Encoder
-        self.encoder = nn.Sequential(
-            ResBlock(in_channels, self.max_channels // 8, downsample=True),  # -> B, 64, H/2, W/2
-            ResBlock(self.max_channels // 8, self.max_channels // 4, downsample=True, activation=self.activation),   # -> B, 128, H/4, W/4
-            ResBlock(self.max_channels // 4, self.max_channels // 2, downsample=True, activation=self.activation),  # -> B, 256, H/8, W/8
-            ResBlock(self.max_channels // 2, self.max_channels, downsample=True, activation=self.activation),  # -> B, 512, H/16, W/16
-        )
-        self.encoded_h, self.encoded_w = input_shape[-1] // 16,  input_shape[-2] // 16
-        self.flattened_size = self.max_channels * self.encoded_h * self.encoded_w
-        self.flatten = nn.Flatten()
-        self.hid_mean = nn.Linear(self.flattened_size, latent_dim)
-        self.hid_logvar = nn.Linear(self.flattened_size, latent_dim)
-
-        self.fc_decode = nn.Linear(latent_dim, self.flattened_size)
-
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(self.max_channels, self.max_channels // 2, kernel_size=4, stride=2, padding=1),  # -> B, 256, H/8, W/8
-            self.activation,
-            ResBlock(self.max_channels // 2, self.max_channels // 4, activation=self.activation),  # -> B, 128, H/8, W/8
-            nn.ConvTranspose2d(self.max_channels // 4, self.max_channels // 8, kernel_size=4, stride=2, padding=1),  # -> B, 64, H/4, W/4
-            self.activation,
-            ResBlock(self.max_channels // 8, self.max_channels // 16, activation=self.activation),  # -> B, 32, H/4, W/4
-            nn.ConvTranspose2d(self.max_channels // 16, self.max_channels // 32, kernel_size=4, stride=2, padding=1),  # -> B, 16, H/2, W/2
-            self.activation,
-            ResBlock(self.max_channels // 32, self.max_channels // 64, activation=self.activation),  # -> B, 8, H/2, W/2
-            nn.ConvTranspose2d(self.max_channels // 64, in_channels, kernel_size=4, stride=2, padding=1),  # -> B, in_channels, H, W
-            nn.Sigmoid()  # Normalize output to [0,1]
-        )
-
-    def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
-        x = self.encoder(x)
-        x = self.flatten(x)
-        mean, logvar = self.hid_mean(x), self.hid_logvar(x)
-        return mean, logvar
-    
-    def reparam(self, mean: Tensor, logvar: Tensor) -> Tensor:
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std) 
-        return mean + eps * std
-    
-    def decode(self, z: Tensor) -> Tensor:
-        x: Tensor = self.fc_decode(z)
-        x = x.view(-1, self.max_channels, self.encoded_w, self.encoded_h) 
-        x = self.decoder(x)
+        x = self.conv(x)
         return x
-    
-    def forward(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        mean, var = self.encode(x)
-        z = self.reparam(mean, var)
-        x_pred = self.decode(z)
-        return x_pred, mean, var
-
+class ConvUp(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, activation):
+        super(ConvUp, self).__init__()
+        self.conv = nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1),
+            activation,
+            nn.Upsample(scale_factor=2, mode="nearest")
+        )
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.conv(x)
+        return x
 class VAE(nn.Module):
-    def __init__(self, in_channels: int, latent_dim: int, device: str, activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 0, 2048, 128]) -> None:
+    def __init__(self, in_channels: int, latent_dim: int, device: str, activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 0, 2048, 128], n_conv_blocks: int = 2, n_starting_filters: int = 32) -> None:
         super(VAE, self).__init__()
         self.device = device
         self.activation = activation
         self.input_shape = input_shape
+        self.n_starting_filters = n_starting_filters 
+        self.n_divs = n_conv_blocks * 2 + 1
+        self.n_conv_blocks = n_conv_blocks
         #encoder
-        self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels, 32, kernel_size=4, stride=2, padding=1), #-> B, 32, H/2, W/2
-            activation,
-            nn.MaxPool2d(kernel_size=4, stride=2, padding=1), #-> B, 32, H/4, W/4
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1), #-> B, 64, H/8, W/8
-            activation,
-            nn.MaxPool2d(kernel_size=4, stride=2, padding=1), #-> B, 64, H/16, W/16
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1), #-> B, 128, H/32, W/32
-            activation
-        )
-        self.encoded_w, self.encoded_h = input_shape[-1] // 32, input_shape[-2] // 32
-        flattened_size = 128 * self.encoded_h * self.encoded_w
+        layers: list = []
+        for i in range(self.n_conv_blocks):
+            if i == 0:
+                layers.append(ConvDown(in_channels, self.n_starting_filters, activation))
+            else:
+                layers.append(ConvDown(self.n_starting_filters * (2 ** (i - 1)), self.n_starting_filters * (2 ** i), activation))
+        layers.append(nn.Conv2d(self.n_starting_filters * (2 ** (self.n_conv_blocks - 1)), self.n_starting_filters * (2 ** self.n_conv_blocks), kernel_size=4, stride=2, padding=1))
+        layers.append(activation)
+        self.encoder = nn.Sequential(*layers)
 
-        self.flatten = nn.Flatten() # -> B, 128 * H/32 * W/32
-        self.hid_mean = nn.Linear(flattened_size, latent_dim) # -> B, Latent Dim
-        self.hid_var = nn.Linear(flattened_size, latent_dim) # -> B, Latent Dim
-        #decoder
-        self.fc_decode = nn.Linear(latent_dim, flattened_size) # -> B, 128 * H/32 * W/32
-        self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1), # -> B, 64, H/16, W/16
-            activation,
-            nn.Upsample(scale_factor=2, mode="nearest"),# -> B, 64, H/8, W/8
-            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1), # -> B, 32, H/4, W/4
-            activation,
-            nn.Upsample(scale_factor=2, mode="nearest"), # -> B, 32, H/2, W/2
-            nn.ConvTranspose2d(32, in_channels, kernel_size=4, stride=2, padding=1), # -> B, 1, H, W
-            nn.Sigmoid()
-        )
+        self.encoded_w, self.encoded_h = input_shape[-1] // (2 ** self.n_divs), input_shape[-2] // (2 ** self.n_divs)
+        flattened_size = self.n_starting_filters * (2 ** self.n_conv_blocks) * self.encoded_h * self.encoded_w
+
+        self.flatten = nn.Flatten()  # -> B, 128 * H/32 * W/32
+        self.hid_mean = nn.Linear(flattened_size, latent_dim)  # -> B, Latent Dim
+        self.hid_var = nn.Linear(flattened_size, latent_dim)  # -> B, Latent Dim
+
+        # Decoder
+        self.fc_decode = nn.Linear(latent_dim, flattened_size)  # -> B, 128 * H/32 * W/32
+        layers = []
+        for i in range(self.n_conv_blocks, 0, -1):
+            layers.append(ConvUp(self.n_starting_filters * (2 ** i), self.n_starting_filters * (2 ** (i - 1)), activation))
+        layers.append(nn.ConvTranspose2d(self.n_starting_filters, in_channels, kernel_size=4, stride=2, padding=1))
+        layers.append(nn.Sigmoid())
+        self.decoder = nn.Sequential(*layers)
 
     def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
         x = self.encoder(x)
@@ -142,7 +80,7 @@ class VAE(nn.Module):
     
     def decode(self, z: Tensor) -> Tensor:
         x: Tensor = self.fc_decode(z)
-        x = x.view(-1, 128, self.encoded_h, self.encoded_w) 
+        x = x.view(-1, self.n_starting_filters * (2 ** self.n_conv_blocks), self.encoded_h, self.encoded_w) 
         x = self.decoder(x)
         return x
     

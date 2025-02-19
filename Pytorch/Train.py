@@ -14,12 +14,12 @@ from Conf import *
 
 batch_size: int = 1
 epochs: int = 300
-learning_rate: float = 5e-4
+learning_rate: float = 1e-4
 lr_decay: int = 40
 lr_gamma: float = 0.1
 reprod_loss_weight: float = 20000
 logging_level: int = logging.INFO
-model_name: str = "audio_vae_v4_bigger_lat"
+model_name: str = "audio_vae_v4_mod"
 training_data_name: str = "training_v2"
 
 
@@ -32,10 +32,10 @@ logger.info(f"Data loaded with shape: {file.shape}")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model = VAE(in_channels=1, latent_dim=1024, device=device,input_shape=[0,0, file.shape[-2], file.shape[-1]]).to(device)
+model = VAE(in_channels=1, latent_dim=4096, device=device,input_shape=[0,0, file.shape[-2], file.shape[-1]], n_conv_blocks=1, n_starting_filters=16).to(device)
 if os.path.exists(f"{MODEL_PATH}/{model_name}.pth"):
     model.load_state_dict(torch.load(f"{MODEL_PATH}/{model_name}.pth"))
-optimizer = optim.AdamW(model.parameters(), lr=1e-5)
+optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay, gamma=lr_gamma)
 x = train_VAE(model, data_loader, optimizer, loss_VAE, epochs=epochs, device=device, reprod_loss_weight=reprod_loss_weight)
 scatter_plot(x)
