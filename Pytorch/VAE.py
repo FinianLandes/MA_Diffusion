@@ -9,6 +9,40 @@ import time
 from Utils import *
 
 logger = logging.getLogger(__name__)
+
+class ConvBottleneckEncoder(nn.Module):
+    def __init__(self, in_channels: int, latent_dim: int):
+        super().__init__()
+        self.conv_mean = nn.Conv2d(in_channels, latent_dim, kernel_size=1)
+        self.conv_logvar = nn.Conv2d(in_channels, latent_dim, kernel_size=1) 
+    def forward(self, x: Tensor) -> tuple[Tensor,...]:
+        return self.conv_mean(x), self.conv_logvar(x)
+
+class ConvBottleneckDecoder(nn.Module):
+    def __init__(self, latent_dim: int, out_channels: int):
+        super().__init__()
+        self.expand = nn.ConvTranspose2d(latent_dim, out_channels, kernel_size=1)
+
+    def forward(self, z: Tensor) -> Tensor:
+        return self.expand(z)
+
+class LinBottleneckEncoder(nn.Module):
+    def __init__(self, flattened_size: int, latent_dim: int):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.hid_mean = nn.Linear(flattened_size, latent_dim)
+        self.hid_logvar = nn.Linear(flattened_size, latent_dim)
+    def forward(self, x: Tensor) -> tuple[Tensor,...]:
+        x = self.flatten(x)
+        return self.hid_mean(x), self.hid_logvar(x)
+
+class LinBottleneckDecoder(nn.Module):
+    def __init__(self, latent_dim: int, flattened_size: int):
+        super().__init__()
+        self.fc_decode = nn.Linear(latent_dim, flattened_size)
+    def forward(self, x: Tensor) -> Tensor:
+        return self.fc_decode(x)
+
 class ConvDown(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, activation):
         super(ConvDown, self).__init__()
@@ -20,6 +54,7 @@ class ConvDown(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         x = self.conv(x)
         return x
+
 class ConvUp(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, activation):
         super(ConvUp, self).__init__()
@@ -31,8 +66,22 @@ class ConvUp(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         x = self.conv(x)
         return x
+
 class VAE(nn.Module):
-    def __init__(self, in_channels: int, latent_dim: int, device: str, activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 0, 2048, 128], n_conv_blocks: int = 2, n_starting_filters: int = 32) -> None:
+    def __init__(self, in_channels: int, latent_dim: int, device: str = "cpu", activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 1, 2048, 128], n_conv_blocks: int = 2, n_starting_filters: int = 32, lin_bottleneck: bool = False) -> None:
+        """Class for Convolutional VAE
+        Args:
+            in_channels (int): Number of input channels.
+            latent_dim (int): Size of latent Dimension (1-D).
+            device (str): Computing Device. Defaults to cpu.
+            activation (_type_, optional): A torch activation fucntion. Defaults to nn.LeakyReLU(0.3).
+            input_shape (ndarray, optional): shape of input in format [B, C, H, W]. Defaults to [0, 1, 2048, 128].
+            n_conv_blocks (int, optional): Number of convoltional blocks (Conv -> Activation -> Pool) size reduction is  // (4 ** number of blocks) + 2. Defaults to 2.
+            n_starting_filters (int, optional): Filter double in each Conv Block. Defaults to 32.
+            lin_bottleneck (bool, optional): Whether The bottleneck is made form convolutional layers or linear layers, if convolutional latent dim is a number of channels otherwise size of the lin layer. Defaults to False.
+        Returns:
+            None
+        """
         super(VAE, self).__init__()
         self.device = device
         self.activation = activation
@@ -53,13 +102,12 @@ class VAE(nn.Module):
 
         self.encoded_w, self.encoded_h = input_shape[-1] // (2 ** self.n_divs), input_shape[-2] // (2 ** self.n_divs)
         flattened_size = self.n_starting_filters * (2 ** self.n_conv_blocks) * self.encoded_h * self.encoded_w
-
-        self.flatten = nn.Flatten()  # -> B, 128 * H/32 * W/32
-        self.hid_mean = nn.Linear(flattened_size, latent_dim)  # -> B, Latent Dim
-        self.hid_var = nn.Linear(flattened_size, latent_dim)  # -> B, Latent Dim
-
-        # Decoder
-        self.fc_decode = nn.Linear(latent_dim, flattened_size)  # -> B, 128 * H/32 * W/32
+        if lin_bottleneck:
+            self.bottleneck_encoder = LinBottleneckEncoder(flattened_size, latent_dim)
+            self.bottleneck_decoder = LinBottleneckDecoder(latent_dim, flattened_size)
+        else:
+            self.bottleneck_encoder = ConvBottleneckEncoder(self.n_starting_filters * (2 ** self.n_conv_blocks), latent_dim)
+            self.bottleneck_decoder = ConvBottleneckDecoder(latent_dim, self.n_starting_filters * (2 ** self.n_conv_blocks))
         layers = []
         for i in range(self.n_conv_blocks, 0, -1):
             layers.append(ConvUp(self.n_starting_filters * (2 ** i), self.n_starting_filters * (2 ** (i - 1)), activation))
@@ -69,8 +117,7 @@ class VAE(nn.Module):
 
     def encode(self, x: Tensor) -> tuple[Tensor, Tensor]:
         x = self.encoder(x)
-        x = self.flatten(x)
-        mean, logvar = self.hid_mean(x), self.hid_var(x)
+        mean, logvar = self.bottleneck_encoder(x)
         return mean, logvar
     
     def reparam(self, mean: Tensor, logvar: Tensor) -> Tensor:
@@ -79,7 +126,7 @@ class VAE(nn.Module):
         return mean + eps * std
     
     def decode(self, z: Tensor) -> Tensor:
-        x: Tensor = self.fc_decode(z)
+        x: Tensor = self.bottleneck_decoder(z)
         x = x.view(-1, self.n_starting_filters * (2 ** self.n_conv_blocks), self.encoded_h, self.encoded_w) 
         x = self.decoder(x)
         return x
@@ -96,7 +143,7 @@ def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor, alpha: flo
     KL = -0.5 * torch.sum(1 + logvar - mean.pow(2) - (logvar + eps).exp())
     return alpha * reprod_loss + KL, reprod_loss * alpha, KL
 
-def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float) -> float:    
+def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float, checkpoint_freq: int = 0, model_path: str = "") -> float:    
     model.train()
     logger.info(f"Training started on {device}")
     total_time: float = 0
@@ -107,10 +154,11 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
         total_KL: float = 0
         start_time: float = time.time()
         for batch_idx, (x, _) in enumerate(data_loader):
-            x: Tensor = x.to(device)
-            x = x.unsqueeze(1)
-            x_pred, mean, logvar = model(x)
-            loss, reprod_loss, KL = loss_function(x, x_pred, mean, logvar, reprod_loss_weight)
+            with torch.autocast(device):
+                x: Tensor = x.to(device)
+                x = x.unsqueeze(1)
+                x_pred, mean, logvar = model(x)
+                loss, reprod_loss, KL = loss_function(x, x_pred, mean, logvar, reprod_loss_weight)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -131,6 +179,9 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
 
         logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Avg. Reprod: {avg_reprod:.5e} Avg. KL: {avg_KL:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s")
         loss_list.append(avg_loss)
+        if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
+            torch.save(model.state_dict(), model_path)
+            logger.light_debug(f"Checkpoint saved model to {model_path}")
     return loss_list
 
 def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1) -> ndarray:

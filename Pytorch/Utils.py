@@ -1,6 +1,8 @@
 # Torch
 import torch
+from torch import nn, Tensor
 from torch.utils.data import DataLoader, Dataset
+import torch.optim as optim
 # Utils
 import numpy as np
 from numpy import ndarray
@@ -118,11 +120,6 @@ def spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, log: bool = True) -
     logger.light_debug(f"Reconstructed audio: {audio.shape}")
     return audio
 
-def visualize_spectogram(spectogram: ndarray, sample_rate: int = 44100, len_fft: int = 4096) -> None:
-    plt.figure(figsize=(10, 4))
-    librosa.display.specshow(spectogram, sr=sample_rate, n_fft=len_fft)
-    plt.show()
-
 def normalize(data: ndarray, min_val: float = 0, max_val: float = 1) -> ndarray:
     min_data: float = np.min(data)
     max_data: float = np.max(data)
@@ -151,6 +148,7 @@ def dimension_for_spec_to_audio(spec: ndarray, len_fft: int = 4096) -> ndarray:
         spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
     return spec
 
+# Visualize Data
 def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch", y_label: str = "Lr", color: str = "blue", switch_x_y: bool = True) -> None:
     if data_y is None:
         data_y = np.arange(len(data_x))
@@ -163,6 +161,15 @@ def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch"
         plt.xlabel = x_label
         plt.ylabel = y_label
     plt.show()
+
+def visualize_spectogram(spectogram: ndarray, sample_rate: int = 44100, len_fft: int = 4096) -> None:
+    plt.figure(figsize=(10, 4))
+    librosa.display.specshow(spectogram, sr=sample_rate, n_fft=len_fft)
+    plt.show()
+# Torch utils
+def count_parameters(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 class Audio_Data(Dataset):
     def __init__(self, data: ndarray, labels: ndarray = None, dtype: torch.dtype = torch.float32) -> None:
         self.data = torch.tensor(data, dtype=dtype)
