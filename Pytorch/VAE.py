@@ -143,7 +143,23 @@ def loss_VAE(x: Tensor, x_pred: Tensor, mean: Tensor, logvar: Tensor, alpha: flo
     KL = -0.5 * torch.sum(1 + logvar - mean.pow(2) - (logvar + eps).exp())
     return alpha * reprod_loss + KL, reprod_loss * alpha, KL
 
-def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float, checkpoint_freq: int = 0, model_path: str = "") -> float:    
+def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimizer, loss_function: callable, epochs: int, device: str, reprod_loss_weight: float, checkpoint_freq: int = 0, model_path: str = "") -> list[float]:
+    """Function for training a VAE from VAE.py
+
+    Args:
+        model (nn.Module): Torch VAE model.
+        data_loader (DataLoader): Torch Dataloader.
+        optimizer (optim.Optimizer): Torch Optimizer.
+        loss_function (callable): Loss function for training.
+        epochs (int): Number of training Epochs.
+        device (str): A torch device eg cpu.
+        reprod_loss_weight (float): Weight of the reprod loss vs the KL divergence.
+        checkpoint_freq (int, optional): Saves the model every n epochs set to 0 for no saving. Defaults to 0.
+        model_path (str, optional): Model path with the suffix .pth for where to save the model. Defaults to "".
+
+    Returns:
+        list[float]: Loss of each epoch.
+    """
     model.train()
     logger.info(f"Training started on {device}")
     total_time: float = 0
@@ -184,7 +200,7 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
             logger.light_debug(f"Checkpoint saved model to {model_path}")
     return loss_list
 
-def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1) -> ndarray:
+def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1, lin_bottleneck: bool = False) -> ndarray:
     model.eval()
     logger.light_debug("Started creating samples")
     with torch.no_grad():
