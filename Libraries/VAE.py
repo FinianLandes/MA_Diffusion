@@ -6,7 +6,7 @@ import numpy as np
 from numpy import ndarray
 import logging
 import time
-from Utils import *
+from .Utils import *
 
 logger = logging.getLogger(__name__)
 
