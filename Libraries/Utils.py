@@ -58,6 +58,7 @@ def get_filenames_from_folder(path: str, filetype: str = None) -> list:
         files: list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f)) and f.endswith(filetype)]
     else:
         files: list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+    logger.light_debug(f"Got filenames {files} from {path}")
     return files
 
 # Other Manipulations
