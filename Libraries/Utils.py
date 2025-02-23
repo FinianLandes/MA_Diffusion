@@ -152,6 +152,27 @@ def add_noise(data: ndarray, noise_factor: float = 0.05) -> ndarray:
     noise: ndarray = np.random.normal(0, noise_factor, data.shape)
     return np.clip(data + noise, min_val, max_val)
 
+def denoising_fft(audio: ndarray, min_mag: float = 50) -> ndarray:
+    logger.light_debug(f"Started denoising on audio of shape {audio.shape}")
+    n: int = audio.shape[0]
+    fft = np.fft.fft(audio, n)
+    magnitude = np.abs(fft)
+    fft[magnitude < min_mag] = 0
+    ifft = np.fft.ifft(fft).real
+    logger.light_debug(f"Denoised audio of shape {ifft.shape}")
+    return ifft
+
+def denoising_spectral_gate(audio: ndarray, sample_rate: int = 44100, threshold: float = 0.02) -> ndarray:
+    logger.light_debug(f"Started denoising on audio of shape {audio.shape}")
+    stft = librosa.stft(audio)
+    magnitude, phase = np.abs(stft), np.angle(stft)
+    noise_floor = np.mean(magnitude[:, :10], axis=1, keepdims=True)
+    
+    mask = magnitude > (noise_floor * threshold)
+    denoised_stft = stft * mask
+    istft = librosa.istft(denoised_stft,)
+    logger.light_debug(f"Denoised audio of shape {istft.shape}")
+    return istft
 # Visualize Data
 def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch", y_label: str = "Lr", color: str = "blue", switch_x_y: bool = True) -> None:
     if data_y is None:

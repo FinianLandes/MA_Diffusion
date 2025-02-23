@@ -200,20 +200,28 @@ def train_VAE(model: nn.Module, data_loader: DataLoader, optimizer: optim.Optimi
             logger.light_debug(f"Checkpoint saved model to {model_path}")
     return loss_list
 
-def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1, lin_bottleneck: bool = False) -> ndarray:
+def generate_sample(model: VAE, device: str, sample: Tensor = None, num_samples: int = 1) -> ndarray:
     model.eval()
     logger.light_debug("Started creating samples")
+
     with torch.no_grad():
         if sample is not None:
             mean, var = model.encode(sample.to(device))
             std = torch.exp(0.5 * var)
-            eps = torch.randn((num_samples,) + mean.shape, device=device)
-            z = mean.unsqueeze(0) + eps * std.unsqueeze(0)
+            eps = torch.randn((num_samples,) + mean.shape[1:], device=device)
+            z = mean + eps * std
+
         else:
-            z = torch.randn((num_samples, model.hid_mean.out_features), device=device)
-        x_pred = model.decode(z).cpu().numpy() 
+            latent_channels = model.bottleneck_decoder.expand.in_channels
+            latent_shape = (num_samples, latent_channels, model.encoded_h, model.encoded_w)
+            z = torch.randn(latent_shape, device=device)
+
+        x_pred = model.decode(z).cpu().numpy()
+
     logger.light_debug(f"Created samples: {x_pred.shape}")
     return x_pred
+
+
 
 def fwd_pass(model: VAE, device: str, sample: Tensor = None) -> ndarray:
     model.eval()
