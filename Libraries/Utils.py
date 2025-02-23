@@ -8,7 +8,7 @@ import numpy as np
 from numpy import ndarray
 from scipy.io import wavfile
 import matplotlib.pyplot as plt
-import librosa, os, logging, time
+import librosa, os, logging, time, soundfile
 
 #Logging
 LIGHT_DEBUG: int = 15
@@ -50,7 +50,9 @@ def load_training_data(path: str) -> ndarray:
     return data
 
 def save_audio_file(audio: ndarray, path: str, sample_rate: int = 44100) -> None:
-    wavfile.write(path, sample_rate, audio)
+    if audio.dtype != np.int16:
+        audio = normalize(audio, -0.99999, 0.99999)
+    soundfile.write(path, audio, sample_rate)
     logger.light_debug(f"Saved file to:{path}")
 
 def get_filenames_from_folder(path: str, filetype: str = None) -> list:
@@ -85,20 +87,20 @@ def create_dataloader(data: Dataset, batch_size: int, shuffle: bool = False) -> 
     return DataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
 
 # Spectograms
-def audio_to_spectrogram(audio: ndarray, len_fft: int = 4096, log: bool = True) -> ndarray:
+def audio_to_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
     logger.light_debug("Started STFT")
-    stft = librosa.stft(audio, n_fft=len_fft)
+    stft = librosa.stft(audio, n_fft=len_fft, hop_length=hop_length)
     spec = np.abs(stft)
     if log:
         spec = librosa.amplitude_to_db(spec)
     logger.light_debug(f"Created spectogram: {spec.shape}")
     return spec
 
-def audio_splits_to_spectograms(audio: ndarray, len_fft: int = 4096, log: bool = True) -> ndarray:
+def audio_splits_to_spectograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
     logger.light_debug("Started STFT on splits")
     specs: list = []
     for i,split in enumerate(audio):
-        stft = librosa.stft(split, n_fft=len_fft)
+        stft = librosa.stft(split, n_fft=len_fft, hop_length=hop_length)
         spec = np.abs(stft)
         if log:
             spec = librosa.amplitude_to_db(spec)
@@ -111,13 +113,14 @@ def audio_splits_to_spectograms(audio: ndarray, len_fft: int = 4096, log: bool =
     logger.light_debug(f"Created spectograms of splits: {specs.shape}")
     return specs
 
-def spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, log: bool = True) -> ndarray:
+def spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
     logger.light_debug("Started GL")
     if spec.shape[0] != len_fft // 2 + 1:
         spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
     if log:
         spec = librosa.db_to_amplitude(spec)
-    audio: ndarray = librosa.griffinlim(spec, n_fft=len_fft)
+    audio: ndarray = librosa.griffinlim(spec, n_fft=len_fft, hop_length=hop_length)
+    audio = normalize(audio, -0.99999, 0.99999)
     logger.light_debug(f"Reconstructed audio: {audio.shape}")
     return audio
 
@@ -144,10 +147,10 @@ def dimension_for_VAE(data: ndarray) -> ndarray:
         data = data[...,:(data.shape[-2] // 32) * 32, :]
     return data
 
-def dimension_for_spec_to_audio(spec: ndarray, len_fft: int = 4096) -> ndarray:
-    if spec.shape[0] != (len_fft // 2 + 1):
-        spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
-    return spec
+def add_noise(data: ndarray, noise_factor: float = 0.05) -> ndarray:
+    min_val, max_val = np.min(data), np.max(data)
+    noise: ndarray = np.random.normal(0, noise_factor, data.shape)
+    return np.clip(data + noise, min_val, max_val)
 
 # Visualize Data
 def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch", y_label: str = "Lr", color: str = "blue", switch_x_y: bool = True) -> None:
