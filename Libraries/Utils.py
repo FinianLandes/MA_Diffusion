@@ -6,7 +6,6 @@ import torch.optim as optim
 # Utils
 import numpy as np
 from numpy import ndarray
-from scipy.io import wavfile
 import matplotlib.pyplot as plt
 import librosa, os, logging, time, soundfile
 

@@ -4,8 +4,7 @@ from torch.utils.data import DataLoader
 import torch.optim as optim
 import numpy as np
 from numpy import ndarray
-import logging
-import time
+import logging, time
 from .Utils import *
 
 logger = logging.getLogger(__name__)

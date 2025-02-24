@@ -7,3 +7,4 @@ MULTI_CHAN_FFT_LEN: list[int] = [256, 1024, 4096]
 LEN_HOP: int = LEN_FFT // 4
 MULTI_CHAN_HOP_LEN: list[int] = [i // 4 for i in MULTI_CHAN_FFT_LEN]
 TIME_FRAME_S: int = 8
+BATCH_SIZE: int = 32
