@@ -29,38 +29,41 @@ class Diffusion():
         self.u_net: nn.Module = u_net
         self.optimizer: optim.Optimizer = u_net_optimizer
         self.T = diffusion_timesteps
-    
-    def embed_timestep(self, t: int) -> Tensor:
-        ...
-    
-    def add_noise_t(t: int, x_0: Tensor, schedule: Tensor) -> Tensor:
-        e: Tensor = torch.randn_like(x_0)
-        return 
+        
 
-    def train(self, data_loader: DataLoader, device: str = "cpu", epochs: int = 100, loss_function: Callable = nn.SELU(), noise_schedule: Tensor = None, checkpoint_freq: int = 0, model_path: str = "") -> list[float]:
+    def train(self, data_loader: DataLoader, device: str = "cpu", epochs: int = 100, loss_function: Callable = nn.MSELoss(), noise_schedule: Tensor = None, checkpoint_freq: int = 0, model_path: str = "") -> list[float]:
+        if device == "cuda":
+            self.scaler = torch.cuda.amp.GradScaler()
         loss_list: list[float] = []
-        total_time: float = 0
+        total_time: float = 0.0
         for e in range(epochs):
             total_loss: float = 0
             start_time: float = time.time()
             for b_idx, (x,_) in enumerate(data_loader):
-                x: Tensor = x.to(device)
-                e: Tensor = torch.randn_like(x)
-                timesteps: Tensor = torch.randint(0, self.T, (x.shape[0],), device=device)
-                t_embed: Tensor = self.embed_timestep(timesteps)
-                x = torch.sqrt(noise_schedule[timesteps]) * x + torch.sqrt(1 - noise_schedule[timesteps]) * e
+                self.optimizer.zero_grad()
 
-                pred_noise = self.u_net(x, t_embed)
+                x: Tensor = x.to(device).unsqueeze(1)
+                eps: Tensor = torch.randn_like(x)
+                timesteps: Tensor = torch.randint(0, self.T, (x.shape[0],1,1,1), device=device)
+                x = torch.sqrt(noise_schedule[timesteps]) * x + torch.sqrt(1 - noise_schedule[timesteps]) * eps
 
-                loss: Tensor = loss_function(pred_noise, e)
+                if device == "cuda":
+                    with torch.amp.autocast(device_type="cuda"):
+                        pred_noise = self.u_net(x, timesteps)
+                        loss: Tensor = loss_function(pred_noise, eps)
+                else:
+                    pred_noise = self.u_net(x, timesteps)
+                    loss: Tensor = loss_function(pred_noise, eps)
+
                 total_loss += loss.item()
 
-                self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+                torch.cuda.empty_cache()
 
                 if logger.getEffectiveLevel() == LIGHT_DEBUG:
                     print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {b_idx + 1:02d}/{len(data_loader):02d}", end='')
+            
             if logger.getEffectiveLevel() == LIGHT_DEBUG:
                 print()
 
@@ -76,3 +79,44 @@ class Diffusion():
                 torch.save(self.u_net.state_dict(), model_path)
                 logger.light_debug(f"Checkpoint saved model to {model_path}")
         return loss_list
+
+    def bwd_diffusion(self, x: Tensor, noise_schedule: Tensor, device: str = "cpu") -> Tensor:
+        self.u_net.eval() 
+        with torch.no_grad():
+            for t in reversed(range(self.T)): 
+                timesteps = torch.full((x.shape[0], 1, 1, 1), t, device=device, dtype=torch.long)
+                pred_noise = self.u_net(x, timesteps)
+
+                alpha = torch.sqrt(noise_schedule[t])
+                sigma = torch.sqrt(1 - noise_schedule[t])
+                x = (x - sigma * pred_noise) / alpha
+
+                if t > 0:
+                    z = torch.randn_like(x) 
+                    x = x + torch.sqrt(noise_schedule[t]) * z
+
+        return x 
+
+    def sample(self, n_samples: int, noise_schedule: Tensor, device: str = "cpu", data_shape: int = [1, 1, 1024, 672]) -> Tensor:
+        self.u_net.eval()
+        with torch.no_grad():
+            x = torch.randn([n_samples, 1, data_shape[-2], data_shape[-1]])
+            x_hat = self.bwd_diffusion(x, noise_schedule, device)
+
+        return x_hat
+
+    def inference(self, samples: Tensor, noise_schedule: Tensor, device: str = "cpu") -> Tensor:
+        self.u_net.eval()
+        with torch.no_grad():
+            x = samples.to(device).unsqueeze(1) 
+            
+            timesteps = torch.randint(0, self.T, (x.shape[0], 1, 1, 1), device=device)
+            noise = torch.randn_like(x)
+            x_noisy = torch.sqrt(noise_schedule[timesteps]) * x + torch.sqrt(1 - noise_schedule[timesteps]) * noise
+            
+            x_hat = self.bwd_diffusion(x_noisy, noise_schedule, device) 
+
+        return x_hat  
+
+
+

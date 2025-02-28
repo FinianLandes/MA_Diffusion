@@ -198,7 +198,7 @@ class Audio_Data(Dataset):
     def __init__(self, data: ndarray, labels: ndarray = None, dtype: torch.dtype = torch.float32) -> None:
         self.data = torch.tensor(data, dtype=dtype)
         if labels != None:
-            self.labels = torch.tensor(labels, dtype=dtype)
+            self.labels = torch.tensor(labels, dtype=dtype) 
         else:
             self.labels = torch.tensor(data, dtype=dtype)
     def __len__(self):
