@@ -62,10 +62,10 @@ class Diffusion():
                 torch.cuda.empty_cache()
 
                 if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {b_idx + 1:02d}/{len(data_loader):02d}", end='')
+                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {b_idx + 1:02d}/{len(data_loader):02d}", end='', flush=True)
             
             if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                print()
+                print(flush=True)
 
             avg_loss = total_loss / len(data_loader.dataset)
             loss_list.append(avg_loss)
