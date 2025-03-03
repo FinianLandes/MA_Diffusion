@@ -62,6 +62,8 @@ def get_filenames_from_folder(path: str, filetype: str = None) -> list:
     logger.light_debug(f"Got filenames {files} from {path}")
     return files
 
+def path_to_remote_path(path: str, is_remote: bool = True) -> str:
+    return path[3:]
 # Other Manipulations
 def split_audiofile(audio: ndarray, time: int, sample_rate: int = 44100, overlap_s: int = 0) -> ndarray:
     samples: int = sample_rate * time
