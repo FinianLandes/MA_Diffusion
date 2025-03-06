@@ -63,7 +63,9 @@ def get_filenames_from_folder(path: str, filetype: str = None) -> list:
     return files
 
 def path_to_remote_path(path: str, is_remote: bool = True) -> str:
-    return path[3:]
+    if is_remote:
+        return path[3:]
+    else: return path
 # Other Manipulations
 def split_audiofile(audio: ndarray, time: int, sample_rate: int = 44100, overlap_s: int = 0) -> ndarray:
     samples: int = sample_rate * time
@@ -148,32 +150,42 @@ def dimension_for_VAE(data: ndarray) -> ndarray:
         data = data[...,:(data.shape[-2] // 32) * 32, :]
     return data
 
-def add_noise(data: ndarray, noise_factor: float = 0.05) -> ndarray:
-    min_val, max_val = np.min(data), np.max(data)
-    noise: ndarray = np.random.normal(0, noise_factor, data.shape)
-    return np.clip(data + noise, min_val, max_val)
+def audio_to_mel_spectogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
+    logger.light_debug("Started Mel-Spec")
+    spec = librosa.feature.melspectrogram(y=audio, n_fft=len_fft, hop_length=hop_length, sr=sample_rate, fmin=min_freq, n_mels=n_mels)
+    if log:
+        spec = librosa.amplitude_to_db(spec)
+    logger.light_debug(f"Created mel-spectogram: {spec.shape}")
+    return spec
 
-def denoising_fft(audio: ndarray, min_mag: float = 50) -> ndarray:
-    logger.light_debug(f"Started denoising on audio of shape {audio.shape}")
-    n: int = audio.shape[0]
-    fft = np.fft.fft(audio, n)
-    magnitude = np.abs(fft)
-    fft[magnitude < min_mag] = 0
-    ifft = np.fft.ifft(fft).real
-    logger.light_debug(f"Denoised audio of shape {ifft.shape}")
-    return ifft
+def audio_splits_to_mel_spectograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
+    logger.light_debug("Started Mel-Spec on splits")
+    specs: list = []
+    for i,split in enumerate(audio):
+        spec = librosa.feature.melspectrogram(y=split, n_fft=len_fft, hop_length=hop_length, sr=sample_rate, fmin=min_freq, n_mels=n_mels)
+        if log:
+            spec = librosa.amplitude_to_db(spec)
+        specs.append(spec)
+        if (i + 1) % 10 == 0 and logger.getEffectiveLevel() == LIGHT_DEBUG:
+            print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Processed Splits: {i + 1}", end='')
+    if logger.getEffectiveLevel() == LIGHT_DEBUG:
+        print()
+    specs: ndarray = np.array(specs)
+    logger.light_debug(f"Created me-spectograms of splits: {specs.shape}")
+    return specs
 
-def denoising_spectral_gate(audio: ndarray, sample_rate: int = 44100, threshold: float = 0.02) -> ndarray:
-    logger.light_debug(f"Started denoising on audio of shape {audio.shape}")
-    stft = librosa.stft(audio)
-    magnitude, phase = np.abs(stft), np.angle(stft)
-    noise_floor = np.mean(magnitude[:, :10], axis=1, keepdims=True)
-    
-    mask = magnitude > (noise_floor * threshold)
-    denoised_stft = stft * mask
-    istft = librosa.istft(denoised_stft,)
-    logger.light_debug(f"Denoised audio of shape {istft.shape}")
-    return istft
+def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True) -> ndarray:
+    logger.light_debug("Started GL")
+    if spec.shape[0] != len_fft // 2 + 1:
+        spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
+    if log:
+        spec = librosa.db_to_amplitude(spec)
+    audio: ndarray = librosa.feature.inverse.mel_to_audio(spec, sr=sample_rate, n_fft=len_fft, hop_length=hop_length)
+    audio = normalize(audio, -0.99999, 0.99999)
+    logger.light_debug(f"Reconstructed audio: {audio.shape}")
+    return audio
+
+
 # Visualize Data
 def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch", y_label: str = "Lr", color: str = "blue", switch_x_y: bool = True) -> None:
     if data_y is None:

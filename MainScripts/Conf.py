@@ -1,10 +1,7 @@
 DATA_PATH: str = "../Data"
 RESULT_PATH: str = "../Results"
 MODEL_PATH: str = "../Models"
-SAMPLE_RATE: int = 44100
-LEN_FFT: int = 2048
-MULTI_CHAN_FFT_LEN: list[int] = [256, 1024, 4096]
-LEN_HOP: int = LEN_FFT // 4
-MULTI_CHAN_HOP_LEN: list[int] = [i // 4 for i in MULTI_CHAN_FFT_LEN]
-TIME_FRAME_S: int = 8
-BATCH_SIZE: int = 32
+SAMPLE_RATE: int = 32000
+LEN_FFT: int = 480 #2048 #High res
+LEN_HOP: int = 288 #LEN_FFT // 4 #High res
+TIME_FRAME_S: int = 4 

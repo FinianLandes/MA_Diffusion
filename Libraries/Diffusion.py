@@ -1,6 +1,8 @@
 import torch
 from torch import nn, Tensor, functional
 from torch.utils.data import DataLoader
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import _LRScheduler
 import torch.optim as optim
 import numpy as np
 from numpy import ndarray
@@ -11,133 +13,158 @@ from .U_Net import *
 
 logger = logging.getLogger(__name__)
 
-def linear_noise(T: int, beta_start: float = 0.0001,  beta_end: float = 0.02) -> Tensor:
-    beta_t = torch.linspace(beta_start, beta_end, T)
-    alpha_t = 1.0 - beta_t
-    alpha_bar_t = torch.cumprod(alpha_t, dim=0)
-    return alpha_bar_t
-
-def cosine_noise(T: int, zero_offset: float = 0.00001) -> Tensor:
-    steps = torch.linspace(0, T, T + 1)
-    f_t = torch.cos((steps / T + zero_offset) / (1 + zero_offset) * (np.pi / 2)) ** 2
-    alpha_bar_t = f_t / f_t[0]
-    return alpha_bar_t
-
 
 class Diffusion():
-    def __init__(self, u_net: nn.Module, u_net_optimizer: optim.Optimizer, diffusion_timesteps: int) -> None:
-        self.u_net: nn.Module = u_net
-        self.optimizer: optim.Optimizer = u_net_optimizer
-        self.T = diffusion_timesteps
-        
+    def __init__(self, model: nn.Module, noise_steps: int, noise_schedule: str = "cosine", input_dim: list = [1, 1, 1024, 672], device: str = "cpu") -> None:
+        self.model = model
+        self.T = noise_steps
+        self.inp_dim = input_dim
+        self.device = device
+        self.beta = self.get_noise_schedule(noise_schedule).to(self.device)[:, None, None, None]
+        self.alpha = 1 - self.beta
+        self.alpha_hat = torch.cumprod(self.alpha, dim=0)
+    
+    
+    def get_noise_schedule(self, noise_type: str = "cosine") -> Tensor:
+        if noise_type == "cosine":
+            return self.cosine_noise_schedule()
+        if noise_type == "linear":
+            return self.linear_noise_schedule()
+        else:
+            logger.fatal(f"Invalid Noise Schedule {noise_type}")
+    
+    def linear_noise_schedule(self, beta_start: float = 1e-4, beta_end: float = 2e-2) -> Tensor:
+        return torch.linspace(beta_start, beta_end, self.T)
+    
+    def cosine_noise_schedule(self, zero_offset: float = 0.008) -> Tensor:
+        steps = torch.linspace(0, self.T - 1, self.T, device=self.device)
+        f_t = torch.cos((steps / self.T + zero_offset) / (1 + zero_offset) * (np.pi / 2)) ** 2
+        alpha_hat = f_t / f_t[0]
+        alpha_hat_prev = torch.cat([torch.tensor([1.0], device=self.device), alpha_hat[:-1]])
+        beta = 1 - alpha_hat / alpha_hat_prev
+        return torch.clamp(beta, min=1e-6, max=0.999)
 
-    def train(self, data_loader: DataLoader, device: str = "cpu", epochs: int = 100, loss_function: Callable = nn.MSELoss(), noise_schedule: Tensor = None, checkpoint_freq: int = 0, model_path: str = "", gradient_accum: int = 1) -> list[float]:
-        if device == "cuda":
-            self.scaler = torch.cuda.amp.GradScaler()
-        loss_list: list[float] = []
-        total_time: float = 0.0
+    def noise_data(self, x: Tensor, t: Tensor) -> tuple[Tensor, Tensor]:
+        e = torch.randn_like(x).to(self.device)
+        return torch.sqrt(self.alpha_hat[t]) * x + torch.sqrt(1 - self.alpha_hat[t]) * e, e
+    
+    def get_sampling_timesteps(self, n: int) -> Tensor:
+        return torch.randint(0, self.T, (n,)).to(self.device)
+    
+    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "") -> list[float]:
+        logger.info(f"Training started on {self.device}")
+        if self.device == "cuda":
+            self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
+        else:
+            self.scaler = torch.amp.GradScaler(device=self.device)
+        loss_list = []
+        total_time = 0.0
+        self.model.train()
+
         for e in range(epochs):
-            self.u_net.train()
-            total_loss: float = 0
-            start_time: float = time.time()
-            for b_idx, (x,_) in enumerate(data_loader):
+            total_loss = 0
+            start_time = time.time()
+            optimizer.zero_grad()
+
+            for b_idx, (x, _) in enumerate(data_loader):
+                x = x.to(self.device).unsqueeze(1)
+                timesteps = self.get_sampling_timesteps(x.shape[0])
+                x_t, noise = self.noise_data(x, timesteps)
                 
+                with torch.autocast(device_type=self.device):
+                    pred_noise = self.model(x_t, timesteps)
+                    loss = loss_function(pred_noise, noise) / gradient_accum
 
-                x: Tensor = x.to(device).unsqueeze(1)
-                eps: Tensor = torch.randn_like(x)
-                timesteps: Tensor = torch.randint(0, self.T, (x.shape[0],1,1,1), device=device)
-                x = torch.sqrt(noise_schedule[timesteps]) * x + torch.sqrt(1 - noise_schedule[timesteps]) * eps
-
-                if device == "cuda":
-                    with torch.amp.autocast(device_type="cuda"):
-                        pred_noise = self.u_net(x, timesteps)
-                        loss: Tensor = loss_function(pred_noise, eps)
-                    self.scaler.scale(loss).backward()
-                else:
-                    pred_noise = self.u_net(x, timesteps)
-                    loss: Tensor = loss_function(pred_noise, eps)
-                    loss.backward()
-
+                self.scaler.scale(loss).backward()
                 total_loss += loss.item() * gradient_accum
 
                 if (b_idx + 1) % gradient_accum == 0 or (b_idx + 1) == len(data_loader):
-                    if device == "cuda":
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        self.optimizer.step()
-                    self.optimizer.zero_grad()
-                    torch.cuda.empty_cache()
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                    optimizer.zero_grad()
 
                 if logger.getEffectiveLevel() == LIGHT_DEBUG:
                     print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {b_idx + 1:02d}/{len(data_loader):02d}", end='', flush=True)
-            
+
             if logger.getEffectiveLevel() == LIGHT_DEBUG:
                 print(flush=True)
 
-            avg_loss = total_loss / len(data_loader.dataset)
+            if lr_scheduler is not None:
+                lr_scheduler.step()
+
+            avg_loss = total_loss / len(data_loader)
             loss_list.append(avg_loss)
 
             epoch_time = time.time() - start_time
             total_time += epoch_time
             remaining_time = int((total_time / (e + 1)) * (epochs - e - 1))
-            logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {self.optimizer.param_groups[0]['lr']:.5e}")
 
-            if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
-                torch.save(self.u_net.state_dict(), model_path)
-                logger.light_debug(f"Checkpoint saved model to {model_path}")
-        return loss_list
-
-    def bwd_diffusion(self, x: Tensor, noise_schedule: Tensor, device: str = "cpu") -> ndarray:
-        self.u_net.eval()
-        with torch.no_grad():
-            alpha_t = noise_schedule / torch.cat([torch.tensor([1.0], device=device), noise_schedule[:-1]])
-            beta_t = 1.0 - alpha_t
+            logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e}")
             
-            for t in reversed(range(self.T)):
-                timesteps = torch.full((x.shape[0], 1, 1, 1), t, device=device, dtype=torch.long)
-                pred_noise = self.u_net(x, timesteps)
+            if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
+                checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1:03d}.pth"
+                torch.save(self.model.state_dict(), checkpoint_path)
+                if e + 1 != checkpoint_freq:
+                    last_path: str = f"{model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
+                    os.remove(last_path)
+                logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
 
-                alpha = alpha_t[t].to(device)
-                sigma = torch.sqrt(1 - alpha).to(device)
-                x = (x - sigma * pred_noise) / torch.sqrt(alpha)
+        torch.save(self.model.state_dict(), model_path)
+        logger.light_debug(f"Saved model to {model_path}")
+        return loss_list
+    
+    def bwd_diffusion(self, n_samples: int = 8) -> ndarray:
+        logger.info(f"Started sampling {n_samples} samples")
+        self.model.eval()
+        with torch.no_grad():
+            x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
+            
+            for i in reversed(range(1, self.T)):
+                if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {self.T - i}/{self.T}", end='', flush=True)
+                
+                t = torch.full((n_samples,), i, dtype=torch.long, device=self.device)
+                pred_noise = self.model(x, t)
 
-                if t > 0:
-                    z = torch.randn_like(x)
-                    x = x + torch.sqrt(beta_t[t]).to(device) * z
+                if i % 10 == 0 or i == 0:
+                    print(f"Step {i}:")
+                    print(f"  alpha_t: {alpha_t.mean().item():.6f}")
+                    print(f"  alpha_hat_t: {alpha_hat_t.mean().item():.6f}")
+                    print(f"  beta_t: {beta_t.mean().item():.6f}")
+                    print(f"  pred_noise mean/std: {pred_noise.mean().item():.3f}, {pred_noise.std().item():.3f}")
+                    print(f"  pred_noise min/max: {pred_noise.min().item():.3f}, {pred_noise.max().item():.3f}")
+                    print(f"  x min/max: {x.min().item():.3f}, {x.max().item():.3f}")
+                alpha_t = self.alpha.index_select(0, t).view(n_samples, 1, 1, 1)
+                alpha_hat_t = self.alpha_hat.index_select(0, t).view(n_samples, 1, 1, 1)
+                beta_t = self.beta.index_select(0, t).view(n_samples, 1, 1, 1)
 
+                x = (x - ((1 - alpha_t) / torch.sqrt(1 - alpha_hat_t)) * pred_noise) / torch.sqrt(alpha_t)
+                
+                if i > 1:
+                    noise = torch.randn_like(x)
+                    x = x + torch.sqrt(beta_t) * noise
+                
+                del pred_noise, noise, t
+                torch.cuda.empty_cache()
+
+        if logger.getEffectiveLevel() == LIGHT_DEBUG:
+            print(flush=True)
+        logger.info(f"Created {n_samples} samples")
+        
+        self.model.train()
         return x.cpu().numpy()
 
-    def sample(self, n_samples: int, noise_schedule: Tensor, device: str = "cpu", data_shape: list = [1, 1, 1024, 672]) -> ndarray:
-        self.u_net.eval()
-        with torch.no_grad():
-            x = torch.randn([n_samples, 1, data_shape[-2], data_shape[-1]], device=device)  # Explicit device
-            x_hat = self.bwd_diffusion(x, noise_schedule.to(device), device)  # Move noise_schedule
+    
+    def visualize_diffusion_steps(self, x: Tensor, n_spectograms: int = 5) -> None:
+        x = x.to(self.device).unsqueeze(1)
+        batch_size = x.shape[0]
 
-        return x_hat
+        step_size = self.T // n_spectograms
+        selected_timesteps = [i * step_size for i in range(n_spectograms)]
 
-    def inference(self, samples: Tensor, noise_schedule: Tensor, device: str = "cpu") -> ndarray:
-        self.u_net.eval()
-        with torch.no_grad():
-            x = samples.to(device).unsqueeze(1)  # Ensure input is on device
-            timesteps = torch.randint(0, self.T, (x.shape[0], 1, 1, 1), device=device)
-            noise = torch.randn_like(x)  # Inherits x's device
-            x_noisy = torch.sqrt(noise_schedule[timesteps]).to(device) * x + torch.sqrt(1 - noise_schedule[timesteps]).to(device) * noise
+        for t in selected_timesteps:
+            timesteps = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
+            x_t, _ = self.noise_data(x, timesteps)
             
-            x_hat = self.bwd_diffusion(x_noisy, noise_schedule.to(device), device)
-
-        return x_hat
-    def visualize_diffusion_steps(self, x: Tensor, noise_schedule: Tensor, device: str = "cpu", n_spectograms: int = 5) -> None:
-        x = x.to(device).unsqueeze(1)
-        for i in range(n_spectograms):
-            t = i * (self.T // n_spectograms)
-            alpha_t = noise_schedule[t].to(device)
-            epsilon = torch.randn_like(x)
-            x_noisy = torch.sqrt(alpha_t) * x + torch.sqrt(1 - alpha_t) * epsilon
-            visualize_spectogram(x_noisy[0, 0].cpu().numpy())
-
-
-
-
-
-
+            logger.info(f"Visualizing spectrogram at timestep t={t}")
+            visualize_spectogram(x_t[0, 0].cpu().numpy())

@@ -10,109 +10,313 @@ from .Utils import *
 
 logger = logging.getLogger(__name__)
 
-class TimestepEmbedding(nn.Module):
-    def __init__(self, embedding_dim: int) -> None:
-        super().__init__()
-        self.dim = embedding_dim
-
-    def forward(self, t: Tensor) -> Tensor:
-        t = t.view(t.shape[0])
-        half_dim = self.dim // 2
-        emb = torch.exp(-math.log(10000) * torch.arange(half_dim, dtype=torch.float32) / half_dim).to(t.device)
-        emb = t[:, None] * emb[None, :]
-        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-        return emb.view(t.shape[0], self.dim)
-
-class ConvBlockDown(nn.Module):
-    def __init__(self, input_channels: int, activation=nn.LeakyReLU(0.3), n_groups: int = 8, time_emb_dim: int = 128) -> None:
-        super(ConvBlockDown, self).__init__()
-        self.time_conv = nn.Conv2d(time_emb_dim, input_channels * 4, kernel_size=1, bias=True)
-        self.block = nn.Sequential(
-            nn.MaxPool2d(kernel_size=4, stride=2, padding=1),
-            nn.Conv2d(input_channels, input_channels * 2, kernel_size=3, stride=1, padding=1),
-            nn.GroupNorm(num_groups=n_groups, num_channels=input_channels * 2),
-            activation,
-            nn.Conv2d(input_channels * 2, input_channels * 4, kernel_size=3, stride=1, padding=1),
-            activation
+class Down(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, time_embed_dim: int, activation: nn.Module = nn.GELU()) -> None:
+        super(Down, self).__init__()
+        self.seq = nn.Sequential(
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            DoubleConv(in_channels, in_channels, residual=True, activation=activation),
+            DoubleConv(in_channels, out_channels, activation=activation)
         )
-
-    def forward(self, x: Tensor, t_emb: Tensor) -> Tensor:
-        t_emb = t_emb.unsqueeze(-1).unsqueeze(-1)
-        t_emb = self.time_conv(t_emb)
-        output = self.block(x)
-        return output + t_emb
-
-class ConvBlockUp(nn.Module):
-    def __init__(self, input_channels: int, activation=nn.LeakyReLU(0.3), time_emb_dim: int = 128) -> None:
-        super(ConvBlockUp, self).__init__()
-        self.time_conv = nn.Conv2d(time_emb_dim, input_channels // 4, kernel_size=1, bias=True)
-        self.block = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.ConvTranspose2d(input_channels, input_channels // 2, kernel_size=3, stride=1, padding=1),
-            activation,
-            nn.ConvTranspose2d(input_channels // 2, input_channels // 4, kernel_size=3, stride=1, padding=1),
-            activation
+        self.time_seq = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(time_embed_dim, out_channels)
         )
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        x = self.seq(x)
+        t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
+        return x + t_emb
 
-    def forward(self, x: Tensor, t_emb: Tensor) -> Tensor:
-        t_emb = t_emb.unsqueeze(-1).unsqueeze(-1)
-        t_emb = self.time_conv(t_emb)  
-        output = self.block(x)
-        return output + t_emb
+class Up(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int,time_embed_dim: int, activation: nn.Module = nn.GELU()) -> None:
+        super(Up, self).__init__()
+        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.half_channels = nn.Conv2d(in_channels * 2, in_channels, kernel_size=3, stride=1, padding=1)
+        self.seq = nn.Sequential(
+            DoubleConv(in_channels, in_channels, residual=True, activation=activation),
+            DoubleConv(in_channels, out_channels, in_channels // 2, activation=activation)
+        )
+        self.time_seq = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(time_embed_dim, out_channels)
+        )
+    def forward(self, x: Tensor, x_skip: Tensor, t: Tensor) -> Tensor:
+        x = torch.cat([x, x_skip], dim=1)
+        x = self.half_channels(x)
+        x = self.upsample(x)
+        x = self.seq(x)
+        t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
+        return x + t_emb
 
-class U_NET(nn.Module):
-    def __init__(self, in_channels: int, device: str = "cpu", activation = nn.LeakyReLU(0.3), input_shape: ndarray = [0, 1, 2048, 128], n_res_layers: int = 2, n_starting_filters: int = 32, n_groups: int = 8, time_emb_dim: int = 128) -> None:
-        super(U_NET, self).__init__()
-        self.device = device
+class Attention(nn.Module):
+    def __init__(self, channels: int, size: int, activation: nn.Module = nn.GELU()) -> None:
+        super(Attention, self).__init__()
+        self.channels = channels
+        self.size = size
+        self.mha = nn.MultiheadAttention(channels, 4, batch_first=True)
+        self.ln = nn.LayerNorm([channels])
+        self.seq = nn.Sequential(
+            nn.LayerNorm([channels]),
+            nn.Linear(channels, channels),
+            activation,
+            nn.Linear(channels, channels)
+        )
+    def forward(self, x: Tensor) -> None:
+        _, _, H, W = x.shape
+        patch: int = self.size
+        n_patches: int = (H * W) // patch
+
+        x = x.view(-1, self.channels, n_patches * patch).swapaxes(1, 2)
+        x_ln = self.ln(x)
+        attention_val, _ = self.mha(x_ln, x_ln, x_ln)
+        attention_val = attention_val + x
+        attention_val = attention_val + self.seq(attention_val)
+        return attention_val.swapaxes(2, 1).view(-1, self.channels, H, W)
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, mid_channels: int = None, residual: bool = False, activation: nn.Module = nn.GELU()) -> None:
+        super(DoubleConv, self).__init__()
+        self.residual = residual
         self.activation = activation
-        self.n_groups = n_groups
-        self.input_shape = input_shape
-        self.in_channels = in_channels
-        self.n_res_layers = n_res_layers
-        self.n_starting_filters = n_starting_filters
+        if mid_channels is None:
+            mid_channels = out_channels
+        self.seq = nn.Sequential(
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(1, mid_channels),
+            self.activation, 
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(1, out_channels),
+        )
+    def forward(self, x: Tensor) -> Tensor:
+        if self.residual:
+            return self.activation(x + self.seq(x))
+        else: 
+            return self.seq(x)
 
-        self.time_embedding: Tensor = TimestepEmbedding(time_emb_dim)
-
-        layers: list = [nn.Sequential(
-                nn.Conv2d(self.in_channels, n_starting_filters, kernel_size=3, stride=1, padding=1),
-                nn.GroupNorm(num_groups=self.n_groups, num_channels=n_starting_filters),
-                activation,
-                nn.Conv2d(n_starting_filters, n_starting_filters * 2, kernel_size=3, stride=1, padding=1),
-                activation
-            )
-        ]
-        for n in range(self.n_res_layers - 1):
-            layers.append(ConvBlockDown(n_starting_filters * (2 ** (n + 1)), activation=activation, n_groups=self.n_groups, time_emb_dim=time_emb_dim))
-        self.encoder = nn.ModuleList(layers)
-
-        self.n_bottleneck_filters = n_starting_filters * (2 ** (self.n_res_layers + 1))
-        layers: list = []
-        for n in range(self.n_res_layers - 1):
-            layers.append(ConvBlockUp(self.n_bottleneck_filters // (2 ** (n)), activation=activation, time_emb_dim=time_emb_dim))
-        self.decoder = nn.ModuleList(layers)
-
-        self.final_conv = nn.Sequential(
-            nn.ConvTranspose2d(self.n_bottleneck_filters // (2 ** (self.n_res_layers)),self.n_bottleneck_filters // (2 ** (self.n_res_layers + 1)), kernel_size=3, stride=1, padding=1),
+class SE(nn.Module):
+    def __init__(self, in_channels: int, reduction: int = 16, activation: nn.Module = nn.GELU()) -> None:
+        super(SE, self).__init__()
+        self.channels = in_channels
+        red_channels = max(in_channels // reduction, 1)
+        self.seq = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(self.channels, red_channels, kernel_size=1),
             activation,
-            nn.Conv2d(self.n_bottleneck_filters // (2 ** (self.n_res_layers + 1)), 1, kernel_size=1, stride=1), 
-            nn.Sigmoid()
+            nn.Conv2d(red_channels, self.channels, kernel_size=1, bias=True),
+            nn.Sigmoid()  
+        )
+    def forward(self, x: Tensor) -> Tensor:
+        se = self.seq(x)
+        return x * se
+
+class Attention_U_NET(nn.Module):
+    def __init__(self, in_channels: int = 1, time_embed_dim: int = 256, n_starting_filters: int = 32, n_starting_attention_size = 32, n_downsamples: int = 3, activation: nn.Module = nn.GELU(), device: str = "cpu") -> None:
+        super(Attention_U_NET, self).__init__()
+        self.device = device
+        self.time_embed_dim = time_embed_dim
+        self.inp_lay = nn.Conv2d(in_channels, n_starting_filters, kernel_size=3, stride=1, padding=1)
+        self.encoder: list = []
+        for i in range(n_downsamples):
+            down_seq = nn.Sequential(
+                Down(n_starting_filters * (2 ** i), n_starting_filters * (2 ** (i + 1)), time_embed_dim, activation),
+                Attention(n_starting_filters * (2 ** (i + 1)), n_starting_attention_size // (2 ** i), activation)
+                )
+            self.encoder.append(down_seq)
+
+        self.bottleneck = nn.Sequential(
+            DoubleConv(n_starting_filters * (2 ** n_downsamples), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** n_downsamples), activation=activation)
         )
 
+        self.decoder: list = []
+        for i in reversed(range(n_downsamples)):
+            up_seq = nn.Sequential(
+                Up(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** i), time_embed_dim, activation),
+                Attention(n_starting_filters * (2 ** i), (n_starting_attention_size // 2) * (2 ** (n_downsamples - i)), activation)
+
+            )
+            self.decoder.append(up_seq)
+
+        self.out_lay = nn.Conv2d(n_starting_filters, in_channels, kernel_size=1)
+
+    
+    def time_embed(self, t: Tensor, channels: int) -> Tensor:
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2, device=self.device) / channels))
+        enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        return torch.cat([enc_a, enc_b], dim=1)
+    
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
         skip_sols: list = []
-        t_emb = self.time_embedding(t)
-        x = self.encoder[0](x)
+        t = t.unsqueeze(-1)
+        t = self.time_embed(t, self.time_embed_dim)
+
+        x = self.inp_lay(x)
         skip_sols.append(x)
 
-        for block in self.encoder[1:]:
-            x = block(x, t_emb)
+        for block in self.encoder:
+            x = block[0](x, t)
+            x = block[1](x)
             skip_sols.append(x)
-        
-        for i, block in enumerate(self.decoder):
-            x = block(x + skip_sols[-(i + 1)], t_emb)
-        x = self.final_conv(x + skip_sols[0]) 
-        return x
 
-def U_Net_loss(x: Tensor, x_pred: Tensor) -> Tensor:
-    loss = nn.MSELoss()
-    return loss(x, x_pred)
+        x = self.bottleneck(x)
+        skip_sols = skip_sols[::-1]
+
+        for i, block in enumerate(self.decoder):
+            x = block[0](x, skip_sols[i], t)
+            x = block[1](x)
+
+        return self.out_lay(x)
+    
+    def __repr__(self) -> str:
+        s = super().__repr__() + "\n"
+        s += "Encoder:\n"
+        for i, module in enumerate(self.encoder):
+            s += f"  Encoder[{i}]: {module}\n"
+        s += "Bottleneck:\n"
+        s += f"  {self.bottleneck}\n"
+        s += "Decoder:\n"
+        for i, module in enumerate(self.decoder):
+            s += f"  Decoder[{i}]: {module}\n"
+        return s
+
+class SE_U_NET(nn.Module):
+    def __init__(self, in_channels: int = 1, time_embed_dim: int = 256, n_starting_filters: int = 32, n_starting_se_red = 16, n_downsamples: int = 3, activation: nn.Module = nn.GELU(), device: str = "cpu") -> None:
+        super(SE_U_NET, self).__init__()
+        self.device = device
+        self.time_embed_dim = time_embed_dim
+        self.inp_lay = nn.Conv2d(in_channels, n_starting_filters, kernel_size=3, stride=1, padding=1)
+        self.encoder = nn.ModuleList()
+        for i in range(n_downsamples):
+            down_seq = nn.Sequential(
+                Down(n_starting_filters * (2 ** i), n_starting_filters * (2 ** (i + 1)), time_embed_dim, activation),
+                SE(n_starting_filters * (2 ** (i + 1)), n_starting_se_red * (2 ** i), activation)
+                )
+            self.encoder.append(nn.ModuleList(down_seq))
+
+        self.bottleneck = nn.Sequential(
+            DoubleConv(n_starting_filters * (2 ** n_downsamples), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** n_downsamples), activation=activation)
+        )
+
+        self.decoder = nn.ModuleList()
+        for i in reversed(range(n_downsamples)):
+            up_seq = nn.Sequential(
+                Up(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** i), time_embed_dim, activation),
+                SE(n_starting_filters * (2 ** i), n_starting_se_red * (2 ** (n_downsamples - i)), activation)
+            )
+            self.decoder.append(nn.ModuleList(up_seq))
+
+        self.out_lay = nn.Conv2d(n_starting_filters, in_channels, kernel_size=1)
+
+    
+    def time_embed(self, t: Tensor, channels: int) -> Tensor:
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2, device=self.device).float() / channels))
+        enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        return torch.cat([enc_a, enc_b], dim=1)
+    
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        skip_sols: list = []
+        if t.dim() == 1:
+            t = t.unsqueeze(-1).type(torch.float)
+        t = self.time_embed(t, self.time_embed_dim)
+
+        x = self.inp_lay(x)
+
+        for block in self.encoder:
+            x = block[0](x, t)
+            x = block[1](x)
+            skip_sols.append(x)
+        x = self.bottleneck(x)
+        skip_sols = skip_sols[::-1]
+
+        for i, block in enumerate(self.decoder):
+            x = block[0](x, skip_sols[i], t)
+            x = block[1](x)
+        out: Tensor = self.out_lay(x)
+        return out
+    
+    def __repr__(self) -> str:
+        s = super().__repr__() + "\n"
+        s += "Encoder:\n"
+        for i, module in enumerate(self.encoder):
+            s += f"  Encoder[{i}]: {module}\n"
+        s += "Bottleneck:\n"
+        s += f"  {self.bottleneck}\n"
+        s += "Decoder:\n"
+        for i, module in enumerate(self.decoder):
+            s += f"  Decoder[{i}]: {module}\n"
+        return s
+
+class Conv_U_NET(nn.Module):
+    def __init__(self, in_channels: int = 1, time_embed_dim: int = 256, n_starting_filters: int = 32, n_downsamples: int = 3, activation: nn.Module = nn.GELU(), device: str = "cpu") -> None:
+        super(Conv_U_NET, self).__init__()
+        self.device = device
+        self.time_embed_dim = time_embed_dim
+        self.inp_lay = nn.Conv2d(in_channels, n_starting_filters, kernel_size=3, stride=1, padding=1)
+        self.encoder = nn.ModuleList()
+        for i in range(n_downsamples):
+            down_seq = nn.Sequential(
+                Down(n_starting_filters * (2 ** i), n_starting_filters * (2 ** (i + 1)), time_embed_dim, activation),
+                DoubleConv(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** (i + 1)), residual=True, activation=activation)
+                )
+            self.encoder.append(nn.ModuleList(down_seq))
+
+        self.bottleneck = nn.Sequential(
+            DoubleConv(n_starting_filters * (2 ** n_downsamples), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** n_downsamples), activation=activation)
+        )
+
+        self.decoder = nn.ModuleList()
+        for i in reversed(range(n_downsamples)):
+            up_seq = nn.Sequential(
+                Up(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** i), time_embed_dim, activation),
+                DoubleConv(n_starting_filters * (2 ** i), n_starting_filters * (2 ** i), residual=True, activation=activation)
+            )
+            self.decoder.append(nn.ModuleList(up_seq))
+
+        self.out_lay = nn.Conv2d(n_starting_filters, in_channels, kernel_size=1)
+
+    
+    def time_embed(self, t: Tensor, channels: int) -> Tensor:
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2, device=self.device).float() / channels))
+        enc_a = torch.sin(t.repeat(1, channels // 2) * inv_freq)
+        enc_b = torch.cos(t.repeat(1, channels // 2) * inv_freq)
+        return torch.cat([enc_a, enc_b], dim=1)
+    
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        skip_sols: list = []
+        if t.dim() == 1:
+            t = t.unsqueeze(-1).type(torch.float)
+        t = self.time_embed(t, self.time_embed_dim)
+
+        x = self.inp_lay(x)
+
+        for block in self.encoder:
+            x = block[0](x, t)
+            x = block[1](x)
+            skip_sols.append(x)
+        x = self.bottleneck(x)
+        skip_sols = skip_sols[::-1]
+
+        for i, block in enumerate(self.decoder):
+            x = block[0](x, skip_sols[i], t)
+            x = block[1](x)
+        out: Tensor = self.out_lay(x)
+        return out
+    
+    def __repr__(self) -> str:
+        s = super().__repr__() + "\n"
+        s += "Encoder:\n"
+        for i, module in enumerate(self.encoder):
+            s += f"  Encoder[{i}]: {module}\n"
+        s += "Bottleneck:\n"
+        s += f"  {self.bottleneck}\n"
+        s += "Decoder:\n"
+        for i, module in enumerate(self.decoder):
+            s += f"  Decoder[{i}]: {module}\n"
+        return s
