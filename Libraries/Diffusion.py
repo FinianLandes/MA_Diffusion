@@ -111,6 +111,9 @@ class Diffusion():
 
         torch.save(self.model.state_dict(), model_path)
         logger.light_debug(f"Saved model to {model_path}")
+        if checkpoint_freq > 0:
+            checkpoint_path: str = f"{model_path[:-4]}_epoch_{epochs:03d}.pth"
+            os.remove(checkpoint_path)
         return loss_list
     
     def bwd_diffusion(self, n_samples: int = 8) -> ndarray:
