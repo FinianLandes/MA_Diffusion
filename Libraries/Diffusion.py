@@ -51,7 +51,7 @@ class Diffusion():
     def get_sampling_timesteps(self, n: int) -> Tensor:
         return torch.randint(0, self.T, (n,)).to(self.device)
     
-    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "") -> list[float]:
+    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "", start_epoch: int = 0) -> list[float]:
         logger.info(f"Training started on {self.device}")
         if self.device == "cuda":
             self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
@@ -61,7 +61,7 @@ class Diffusion():
         total_time = 0.0
         self.model.train()
 
-        for e in range(epochs):
+        for e in range(start_epoch, start_epoch + epochs):
             total_loss = 0
             start_time = time.time()
             optimizer.zero_grad()
@@ -103,13 +103,13 @@ class Diffusion():
             
             if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
                 checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1:03d}.pth"
-                torch.save(self.model.state_dict(), checkpoint_path)
+                torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict}, model_path)
                 if e + 1 != checkpoint_freq:
                     last_path: str = f"{model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
                     os.remove(last_path)
                 logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
 
-        torch.save(self.model.state_dict(), model_path)
+        torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict, "epoch": e + 1}, model_path)
         logger.light_debug(f"Saved model to {model_path}")
         if checkpoint_freq > 0:
             checkpoint_path: str = f"{model_path[:-4]}_epoch_{epochs:03d}.pth"
@@ -129,31 +129,19 @@ class Diffusion():
                 t = torch.full((n_samples,), i, dtype=torch.long, device=self.device)
                 pred_noise = self.model(x, t)
 
-                if i % 10 == 0 or i == 0:
-                    print(f"Step {i}:")
-                    print(f"  alpha_t: {alpha_t.mean().item():.6f}")
-                    print(f"  alpha_hat_t: {alpha_hat_t.mean().item():.6f}")
-                    print(f"  beta_t: {beta_t.mean().item():.6f}")
-                    print(f"  pred_noise mean/std: {pred_noise.mean().item():.3f}, {pred_noise.std().item():.3f}")
-                    print(f"  pred_noise min/max: {pred_noise.min().item():.3f}, {pred_noise.max().item():.3f}")
-                    print(f"  x min/max: {x.min().item():.3f}, {x.max().item():.3f}")
                 alpha_t = self.alpha.index_select(0, t).view(n_samples, 1, 1, 1)
                 alpha_hat_t = self.alpha_hat.index_select(0, t).view(n_samples, 1, 1, 1)
                 beta_t = self.beta.index_select(0, t).view(n_samples, 1, 1, 1)
 
-                x = (x - ((1 - alpha_t) / torch.sqrt(1 - alpha_hat_t)) * pred_noise) / torch.sqrt(alpha_t)
+                x = (1 / torch.sqrt(alpha_t)) * (x - ((1 - alpha_t) / torch.sqrt(1 - alpha_hat_t)) * pred_noise)
                 
                 if i > 1:
                     noise = torch.randn_like(x)
                     x = x + torch.sqrt(beta_t) * noise
-                
-                del pred_noise, noise, t
-                torch.cuda.empty_cache()
-
+            x = torch.clamp(x, -1.0, 1.0)
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)
         logger.info(f"Created {n_samples} samples")
-        
         self.model.train()
         return x.cpu().numpy()
 

@@ -8,4 +8,34 @@
 | >04.03.2025 | Refactoring the code to be based on the version by Outlier. Due to the increase in Model size i want to now generate bad quality audio and then later use a second neural net to upsample the audio. THis seems to be the state-of-the-art solution for big resolution outputs. | |
 | >05.03.2025 | Played around with preprocessing to create smaller data while still having the best possible quality. Switch sr to 32k(so 0-16k Hz). Tried mel spectograms but due to the bad reconstruction and no significant increase in compression stayed with stft diagrams but modified fft_len=480 and hop_len=288. for 4 sec audio this gives me 93184 values rather than 688k for 8sec with the previous settings.| |
 | >06.03.2025 | Fixed a lot of small bugs and started traing more models, Switched the Attention layer due to complexity and param count for an SE block. THis did not seem to produce meaningful data therefore i switched to Double conv blocks instead of SE blocks. Also switched to a linear noise schedule as the cosine is not working somehow. | |
-| >07.03.2025 | Finally some output is generated it does not containg high contrast and is very noisy but a pattern can be seen. Tjis was achieved by training with Conv_UNET, 1280 samples, 300 epochs (100 epochs/h). Also when training my ~17M param NN takes 10mins per epoch with batch 16, accum. of 2, when training with the full 7.8k samples| |
+| >07.03.2025 | Finally some output is generated it does not containg high contrast and is very noisy but a pattern can be seen. This was achieved by training with Conv_UNET, 1280 samples, 300 epochs (100 epochs/h). Also when training my ~17M param NN takes 10mins per epoch with batch 16, accum. of 2, when training with the full 7.8k samples| |
+| >09.03.2025 | The outputs seemd to have gotten better, but still with a bad output range. Which led me to taking a closer look at my data which got me to the realisation that my normalization might be bad and signle sample might differ a lot due to the normalization taking the min and max value of a whole set rather than the individual sample.||
+
+## General Info
+
+### Folder structure
+
+├── MA
+│   ├── Data
+│   │   ├── datasets.npy            # Preprocessed dataset file (e.g., spectrograms)
+│   │   └── music_file.wav          # Example audio file for processing
+│   ├── Hardcoded NN
+│   │   ├── NN.py                   # Neural network implementation
+│   │   ├── MNIST.py                # MNIST-related code (possibly a test or reference)
+│   │   └── functions.py            # Utility functions for neural networks
+│   ├── Libraries
+│   │   ├── VAE.py                  # Variational Autoencoder implementation
+│   │   ├── Diffusion.py            # Diffusion model implementation
+│   │   ├── Utils.py                # General utility functions
+│   │   └── U_Net.py                # U-Net architecture definition
+│   ├── MainScripts
+│   │   ├── Conf.py                 # Configuration settings
+│   │   ├── Preprocessing.ipynb     # Notebook for data preprocessing
+│   │   ├── Train Diffusion.ipynb   # Notebook for training the diffusion model
+│   │   ├── Eval Diffusion.ipynb    # Notebook for evaluating the diffusion model
+│   │   ├── Train VAE.ipynb         # Notebook for training the VAE
+│   │   └── Eval VAE.ipynb          # Notebook for evaluating the VAE
+│   ├── Models                      # Directory for saved model weights
+│   └── Results                     # Directory for experiment results and outputs
+└── Readme.md                       # This file: project overview and instructions
+
