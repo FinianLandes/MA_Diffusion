@@ -1,5 +1,7 @@
 # MA_DDPM
 
+## Work Journal
+
 | Date       | Content              | Problems             |
 | :---       | :---                 | :---                 |
 | >21.02.2025 | Create a General Structure, with a Preprocessing, Train, Eval and Util files. Important Data Can be set in the Conf.py file. The processing creats n second splits and the converts those to STFT spectograms.  | Using Linear Layers in the VAE will lead to too many Parameters when the VAE does not have a high compression rate. Therefore I implementet a convolutional bottleneck which drastically lowers parameter counts. |
@@ -13,29 +15,54 @@
 
 ## General Info
 
-### Folder structure
+### Directory Details
 
-├── MA
-│   ├── Data
-│   │   ├── datasets.npy            # Preprocessed dataset file (e.g., spectrograms)
-│   │   └── music_file.wav          # Example audio file for processing
-│   ├── Hardcoded NN
-│   │   ├── NN.py                   # Neural network implementation
-│   │   ├── MNIST.py                # MNIST-related code (possibly a test or reference)
-│   │   └── functions.py            # Utility functions for neural networks
-│   ├── Libraries
-│   │   ├── VAE.py                  # Variational Autoencoder implementation
-│   │   ├── Diffusion.py            # Diffusion model implementation
-│   │   ├── Utils.py                # General utility functions
-│   │   └── U_Net.py                # U-Net architecture definition
-│   ├── MainScripts
-│   │   ├── Conf.py                 # Configuration settings
-│   │   ├── Preprocessing.ipynb     # Notebook for data preprocessing
-│   │   ├── Train Diffusion.ipynb   # Notebook for training the diffusion model
-│   │   ├── Eval Diffusion.ipynb    # Notebook for evaluating the diffusion model
-│   │   ├── Train VAE.ipynb         # Notebook for training the VAE
-│   │   └── Eval VAE.ipynb          # Notebook for evaluating the VAE
-│   ├── Models                      # Directory for saved model weights
-│   └── Results                     # Directory for experiment results and outputs
-└── Readme.md                       # This file: project overview and instructions
+- **Data**
+  - `datasets.npy` - Preprocessed dataset file (e.g., spectrograms).
+  - `music_file.wav` - Example audio file for processing.
+
+- **Libraries**
+  - `VAE.py` - Variational Autoencoder implementation.
+  - `Diffusion.py` - Diffusion model implementation.
+  - `Utils.py` - General utility functions.
+  - `U_Net.py` - U-Net architecture definition.
+
+- **MainScripts**
+  - `Conf.py` - Configuration settings.
+  - `Preprocessing.ipynb` - Notebook for data preprocessing.
+  - `Train Diffusion.ipynb` - Notebook for training the diffusion model.
+  - `Eval Diffusion.ipynb` - Notebook for evaluating the diffusion model.
+  - `Train VAE.ipynb` - Notebook for training the VAE.
+  - `Eval VAE.ipynb` - Notebook for evaluating the VAE.
+
+- **Models**
+  - Directory for saved model weights (e.g., `.pth` files).
+
+- **Results**
+  - Directory for experiment results and outputs (e.g., generated spectrograms, loss plots).
+
+### Prerequisits
+
+- **Python**
+  - This was written with Python `3.13.2` but older versions should work aswell.
+
+- **External libraries**
+  - `Numpy`: 2.1.3
+  - `Torch`: 2.6.0
+  - `Librosa`: 0.10.2 (Depending on the python version might require `standard-sunau`, `standard-aifc` and `standard-chunk` which have been removed from the pre-installed libraries in newer python versions.)
+  - `Matplotlib`: 3.10.0
+  - `Soundfile`: 0.13.1
+
+- **Pre-Installed Libraries**
+  - `os`
+  - `sys`
+  - `logging`
+  - `time`
+  - `typing`
+
+### Logging
+
+This codebase is based on the logging module. For the minimal output set logging level to `logging.INFO`. Due to the immense output of some libraries in `logging.DEBUG` mode i added a custom mode between `DEBUG` and `INFO`. Inorder to use this level which prints a lot of info in the custom implemented functions set debug level to `LIGHT_DEBUG`. This is defined in the `conf.py` file.
+
+
 

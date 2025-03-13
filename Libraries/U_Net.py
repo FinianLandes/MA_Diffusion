@@ -5,7 +5,7 @@ import torch.optim as optim
 import numpy as np
 from numpy import ndarray
 from typing import Callable
-import logging, time, math
+import logging, time
 from .Utils import *
 
 logger = logging.getLogger(__name__)

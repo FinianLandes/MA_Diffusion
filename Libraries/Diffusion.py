@@ -15,7 +15,18 @@ logger = logging.getLogger(__name__)
 
 
 class Diffusion():
-    def __init__(self, model: nn.Module, noise_steps: int, noise_schedule: str = "cosine", input_dim: list = [1, 1, 1024, 672], device: str = "cpu") -> None:
+    """The DDPM class.
+    """
+    def __init__(self, model: nn.Module, noise_steps: int, noise_schedule: str = "linear", input_dim: list = [1, 1, 1024, 672], device: str = "cpu") -> None:
+        """Initializer for the DDPM class.
+
+        Args:
+            model (nn.Module): The neural net to learn the noise distribution takes to paramters: the noised image (B, C, H, W) and the time embeding (B,).
+            noise_steps (int): Number of noising steps.
+            noise_schedule (str, optional): The noise schedule type. Defaults to "cosine".
+            input_dim (list, optional): The input shape in format (B, C, H, W). Defaults to [1, 1, 1024, 672].
+            device (str, optional): The training device. Defaults to "cpu".
+        """
         self.model = model
         self.T = noise_steps
         self.inp_dim = input_dim
@@ -24,8 +35,15 @@ class Diffusion():
         self.alpha = 1 - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
     
-    
-    def get_noise_schedule(self, noise_type: str = "cosine") -> Tensor:
+    def get_noise_schedule(self, noise_type: str = "linear") -> Tensor:
+        """Gets a noise schedule.
+
+        Args:
+            noise_type (str, optional): The noise type. Defaults to "linear".
+
+        Returns:
+            Tensor: Returns a noise schedule as beta values.
+        """
         if noise_type == "cosine":
             return self.cosine_noise_schedule()
         if noise_type == "linear":
@@ -34,24 +52,62 @@ class Diffusion():
             logger.fatal(f"Invalid Noise Schedule {noise_type}")
     
     def linear_noise_schedule(self, beta_start: float = 1e-4, beta_end: float = 2e-2) -> Tensor:
+        """Creates a linear noise schedule
+
+        Args:
+            beta_start (float, optional): Minimum beta value. Defaults to 1e-4.
+            beta_end (float, optional): Maximal beta value. Defaults to 2e-2.
+
+        Returns:
+            Tensor: The noise schedule as beta values.
+        """
         return torch.linspace(beta_start, beta_end, self.T)
     
     def cosine_noise_schedule(self, zero_offset: float = 0.008) -> Tensor:
-        steps = torch.linspace(0, self.T - 1, self.T, device=self.device)
-        f_t = torch.cos((steps / self.T + zero_offset) / (1 + zero_offset) * (np.pi / 2)) ** 2
-        alpha_hat = f_t / f_t[0]
-        alpha_hat_prev = torch.cat([torch.tensor([1.0], device=self.device), alpha_hat[:-1]])
-        beta = 1 - alpha_hat / alpha_hat_prev
-        return torch.clamp(beta, min=1e-6, max=0.999)
+        ...
 
     def noise_data(self, x: Tensor, t: Tensor) -> tuple[Tensor, Tensor]:
+        """Adds noise to the data according to the noise schedule and the timesteps.
+
+        Args:
+            x (Tensor): The data to noise.
+            t (Tensor): the timesteps.
+
+        Returns:
+            tuple[Tensor, Tensor]: THe noised data and the noise.
+        """
         e = torch.randn_like(x).to(self.device)
         return torch.sqrt(self.alpha_hat[t]) * x + torch.sqrt(1 - self.alpha_hat[t]) * e, e
     
     def get_sampling_timesteps(self, n: int) -> Tensor:
+        """Get n random timesteps
+
+        Args:
+            n (int): Number of random timesteps.
+
+        Returns:
+            Tensor: Tensor of shape (n,).
+        """
         return torch.randint(0, self.T, (n,)).to(self.device)
     
     def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "", start_epoch: int = 0) -> list[float]:
+        """Training of the DDPM Model.
+
+        Args:
+            epochs (int): number of epochs to train
+            data_loader (DataLoader): Dataloader containing the training data.
+            loss_function (Callable): The loss function.
+            optimizer (Optimizer): An optimizer from the .optim class.
+            lr_scheduler (_LRScheduler, optional): An lr scheduler. Defaults to None.
+            gradient_accum (int, optional): If >1 accumulates the gradients over the given number of batches. Defaults to 1.
+            checkpoint_freq (int, optional): If >0 saves the model each n epochs. Defaults to 0.
+            model_path (str, optional): The model path to save the model to. Defaults to "".
+            start_epoch (int, optional): The starting epoch (just for logging reasons). Defaults to 0.
+
+        Returns:
+            list[float]: The epochs avg. losses as a list.
+        """
+
         logger.info(f"Training started on {self.device}")
         if self.device == "cuda":
             self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
@@ -61,13 +117,16 @@ class Diffusion():
         total_time = 0.0
         self.model.train()
 
-        for e in range(start_epoch, start_epoch + epochs):
+        for e in range(0, epochs):
             total_loss = 0
             start_time = time.time()
             optimizer.zero_grad()
 
             for b_idx, (x, _) in enumerate(data_loader):
-                x = x.to(self.device).unsqueeze(1)
+                if x.dim() == 3:
+                    x = x.to(self.device).unsqueeze(1)
+                else:
+                    x = x.to(self.device)
                 timesteps = self.get_sampling_timesteps(x.shape[0])
                 x_t, noise = self.noise_data(x, timesteps)
                 
@@ -99,24 +158,34 @@ class Diffusion():
             total_time += epoch_time
             remaining_time = int((total_time / (e + 1)) * (epochs - e - 1))
 
-            logger.info(f"Epoch {e + 1:02d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e}")
+            logger.info(f"Epoch {e + 1 + start_epoch:02d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e}")
             
             if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
                 checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1:03d}.pth"
-                torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict}, model_path)
+                torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
                 if e + 1 != checkpoint_freq:
                     last_path: str = f"{model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
-                    os.remove(last_path)
+                    del_if_exists(last_path)
                 logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
 
-        torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict, "epoch": e + 1}, model_path)
+        torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(), "epoch": e + 1}, model_path)
         logger.light_debug(f"Saved model to {model_path}")
+
         if checkpoint_freq > 0:
             checkpoint_path: str = f"{model_path[:-4]}_epoch_{epochs:03d}.pth"
-            os.remove(checkpoint_path)
+            del_if_exists(checkpoint_path)
+        
         return loss_list
     
     def bwd_diffusion(self, n_samples: int = 8) -> ndarray:
+        """The bwd diffusion process.
+
+        Args:
+            n_samples (int, optional): Number of samples to generate. If model contains batch norm creating >1 sample is more efficient. Defaults to 8.
+
+        Returns:
+            ndarray: The generated samples.
+        """
         logger.info(f"Started sampling {n_samples} samples")
         self.model.eval()
         with torch.no_grad():
@@ -147,7 +216,16 @@ class Diffusion():
 
     
     def visualize_diffusion_steps(self, x: Tensor, n_spectograms: int = 5) -> None:
-        x = x.to(self.device).unsqueeze(1)
+        """Visualizes the noise schedule applied to a spectogram.
+
+        Args:
+            x (Tensor): The spectograms to show if more than one are provided first one is shown.
+            n_spectograms (int, optional): Number of steps to visualize. Defaults to 5.
+        """
+        if x.dim() == 3:
+            x = x.to(self.device).unsqueeze(1)
+        else:
+            x = x.to(self.device)
         batch_size = x.shape[0]
 
         step_size = self.T // n_spectograms

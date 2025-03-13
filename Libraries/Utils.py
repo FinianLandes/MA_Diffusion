@@ -133,6 +133,18 @@ def path_to_remote_path(path: str, is_remote: bool = True) -> str:
         return path[3:]
     else: return path
 
+def del_if_exists(path: str) -> None:
+    """Deletes a file or directory if it exists, given its path.
+
+    Args:
+        path (str): filepath.
+    """
+    if os.path.exists(path):
+        os.remove(path)
+        logger.LIGHT_DEBUG(f"{path} deleted")
+    else:
+        logger.LIGHT_DEBUG(f"{path} could not be deleted")
+
 # Other Manipulations
 def split_audiofile(audio: ndarray, time: int, sample_rate: int = 44100, overlap_s: int = 0) -> ndarray:
     """Splits audio into samples of length time, with an optional overlap. Pads the last file with zeroes if necessary.
@@ -431,6 +443,7 @@ def visualize_spectogram(spectogram: ndarray, sample_rate: int = 44100, len_fft:
     plt.figure(figsize=(10, 4))
     librosa.display.specshow(spectogram, sr=sample_rate, n_fft=len_fft)
     plt.show()
+    
 # Torch utils
 def count_parameters(model: nn.Module) -> int:
     """Counts all parameters of NN module. 
