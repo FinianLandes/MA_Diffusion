@@ -90,7 +90,7 @@ class Diffusion():
         """
         return torch.randint(0, self.T, (n,)).to(self.device)
     
-    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "", start_epoch: int = 0) -> list[float]:
+    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "", start_epoch: int = 0, patience: int = 20) -> list[float]:
         """Training of the DDPM Model.
 
         Args:
@@ -103,6 +103,7 @@ class Diffusion():
             checkpoint_freq (int, optional): If >0 saves the model each n epochs. Defaults to 0.
             model_path (str, optional): The model path to save the model to. Defaults to "".
             start_epoch (int, optional): The starting epoch (just for logging reasons). Defaults to 0.
+            patience (int, optional): If > 0 stops training if loss does not improve after given number of epochs. Defaults to 20.
 
         Returns:
             list[float]: The epochs avg. losses as a list.
@@ -113,10 +114,12 @@ class Diffusion():
             self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
         else:
             self.scaler = torch.amp.GradScaler(device=self.device)
-        loss_list = []
-        total_time = 0.0
-        self.model.train()
+        loss_list: list = []
+        total_time: float = 0.0
+        best_loss = float('inf')
+        epochs_no_improve: int = 0
 
+        self.model.train()
         for e in range(0, epochs):
             total_loss = 0
             start_time = time.time()
@@ -148,17 +151,31 @@ class Diffusion():
             if logger.getEffectiveLevel() == LIGHT_DEBUG:
                 print(flush=True)
 
-            if lr_scheduler is not None:
-                lr_scheduler.step()
-
             avg_loss = total_loss / len(data_loader)
             loss_list.append(avg_loss)
+
+            if lr_scheduler is not None:
+                if isinstance(lr_scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                    lr_scheduler.step(avg_loss)
+                else:
+                    lr_scheduler.step()
+
+            if patience > 0:
+                if avg_loss < best_loss:
+                    epochs_no_improve = 0
+                    best_loss = avg_loss
+                else:
+                    epochs_no_improve += 1
+            
+            if epochs_no_improve >= patience:
+                logger.info(f"Early stopping at epoch {e + 1}: Loss has not improved for {patience} epochs")
+                break
 
             epoch_time = time.time() - start_time
             total_time += epoch_time
             remaining_time = int((total_time / (e + 1)) * (epochs - e - 1))
 
-            logger.info(f"Epoch {e + 1 + start_epoch:02d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e}")
+            logger.info(f"Epoch {e + 1 + start_epoch:03d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e}")
             
             if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
                 checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1:03d}.pth"
@@ -172,7 +189,7 @@ class Diffusion():
         logger.light_debug(f"Saved model to {model_path}")
 
         if checkpoint_freq > 0:
-            checkpoint_path: str = f"{model_path[:-4]}_epoch_{epochs:03d}.pth"
+            checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1 - ((e + 1) % checkpoint_freq):03d}.pth"
             del_if_exists(checkpoint_path)
         
         return loss_list
@@ -193,7 +210,7 @@ class Diffusion():
             
             for i in reversed(range(1, self.T)):
                 if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {self.T - i}/{self.T}", end='', flush=True)
+                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {self.T - i}/{self.T} X min/max: {torch.min(x).item()}, {torch.max(x).item()}", end='', flush=True)
                 
                 t = torch.full((n_samples,), i, dtype=torch.long, device=self.device)
                 pred_noise = self.model(x, t)

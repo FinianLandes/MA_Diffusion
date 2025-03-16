@@ -443,7 +443,22 @@ def visualize_spectogram(spectogram: ndarray, sample_rate: int = 44100, len_fft:
     plt.figure(figsize=(10, 4))
     librosa.display.specshow(spectogram, sr=sample_rate, n_fft=len_fft)
     plt.show()
-    
+
+def flatten(data: ndarray) -> ndarray:
+    """Flattens a 3D (N,H,W) to 2d (N,H*W).
+
+    Args:
+        data (ndarray): Array to flatten.
+
+    Returns:
+        ndarray: Flattened array.
+    """
+    N, H, W = data.shape
+    output: ndarray = np.zeros((N, H * W))
+    for i, file in enumerate(data):
+        output[i] = file.flatten()
+    return output
+
 # Torch utils
 def count_parameters(model: nn.Module) -> int:
     """Counts all parameters of NN module. 

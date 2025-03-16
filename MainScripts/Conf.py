@@ -17,9 +17,9 @@ class Audio:
     overlap:int = 1
 
 class Models:
-    """Haperparameters and architecture for u-net and diffusion."""
+    """Hyperparameters and architecture for u-net and diffusion."""
     n_starting_filters: int = 32
-    n_downsamples: int = 3
+    n_downsamples: int = 4
     time_embed_dim: int = 128
     diffusion_timesteps: int = 500
     batch_size: int = 16
