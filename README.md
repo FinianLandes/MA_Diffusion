@@ -12,7 +12,7 @@
 | >06.03.2025 | Fixed a lot of small bugs and started traing more models, Switched the Attention layer due to complexity and param count for an SE block. THis did not seem to produce meaningful data therefore i switched to Double conv blocks instead of SE blocks. Also switched to a linear noise schedule as the cosine is not working somehow. | |
 | >07.03.2025 | Finally some output is generated it does not containg high contrast and is very noisy but a pattern can be seen. This was achieved by training with Conv_UNET, 1280 samples, 300 epochs (100 epochs/h). Also when training my ~17M param NN takes 10mins per epoch with batch 16, accum. of 2, when training with the full 7.8k samples| |
 | >09.03.2025 | The outputs seemd to have gotten better, but still with a bad output range. Which led me to taking a closer look at my data which got me to the realisation that my normalization might be bad and signle sample might differ a lot due to the normalization taking the min and max value of a whole set rather than the individual sample.||
-| >15.03.2025 | Tried another training run with other schedulers a higher Lr seemd to be beneficial getting down to ~0.08. Also switch to Batchnorm but this seemed to have lead to numerical instability during inference so i switched back to groupnorm with 8 groups. After run 1 switched from GELU to SiLU just.  |  |
+| >15.03.2025 | Tried another training run with other schedulers a higher Lr seemd to be beneficial getting down to ~0.08. Also switch to Batchnorm but this seemed to have lead to numerical instability during inference so i switched back to groupnorm with 8 groups. After run 1 switched from GELU to SiLU just to see if it would make a difference.  |  |
 
 ## General Info
 

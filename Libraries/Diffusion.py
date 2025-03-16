@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class Diffusion():
-    """The DDPM class.
+    """The DDPM & DDIM class.
     """
     def __init__(self, model: nn.Module, noise_steps: int, noise_schedule: str = "linear", input_dim: list = [1, 1, 1024, 672], device: str = "cpu") -> None:
         """Initializer for the DDPM class.
@@ -65,7 +65,7 @@ class Diffusion():
     
     def cosine_noise_schedule(self, zero_offset: float = 0.008) -> Tensor:
         ...
-
+    
     def noise_data(self, x: Tensor, t: Tensor) -> tuple[Tensor, Tensor]:
         """Adds noise to the data according to the noise schedule and the timesteps.
 
@@ -194,8 +194,8 @@ class Diffusion():
         
         return loss_list
     
-    def bwd_diffusion(self, n_samples: int = 8) -> ndarray:
-        """The bwd diffusion process.
+    def bwd_diffusion_ddpm(self, n_samples: int = 8) -> ndarray:
+        """The bwd diffusion process with DDPM.
 
         Args:
             n_samples (int, optional): Number of samples to generate. If model contains batch norm creating >1 sample is more efficient. Defaults to 8.
@@ -205,32 +205,84 @@ class Diffusion():
         """
         logger.info(f"Started sampling {n_samples} samples")
         self.model.eval()
-        with torch.no_grad():
-            x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
+        timesteps = self.T
+
+        x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
+        for i in reversed(range(1, timesteps)):
+            if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {timesteps - i}/{timesteps} X min/max: {torch.min(x).item()}, {torch.max(x).item()}", end='', flush=True)
             
-            for i in reversed(range(1, self.T)):
-                if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {self.T - i}/{self.T} X min/max: {torch.min(x).item()}, {torch.max(x).item()}", end='', flush=True)
-                
-                t = torch.full((n_samples,), i, dtype=torch.long, device=self.device)
+            t = torch.full((n_samples,), i, dtype=torch.long, device=self.device)
+            with torch.no_grad():
                 pred_noise = self.model(x, t)
 
-                alpha_t = self.alpha.index_select(0, t).view(n_samples, 1, 1, 1)
-                alpha_hat_t = self.alpha_hat.index_select(0, t).view(n_samples, 1, 1, 1)
-                beta_t = self.beta.index_select(0, t).view(n_samples, 1, 1, 1)
+            alpha_t = self.alpha.index_select(0, t).view(n_samples, 1, 1, 1)
+            alpha_hat_t = self.alpha_hat.index_select(0, t).view(n_samples, 1, 1, 1)
+            beta_t = self.beta.index_select(0, t).view(n_samples, 1, 1, 1)
 
-                x = (1 / torch.sqrt(alpha_t)) * (x - ((1 - alpha_t) / torch.sqrt(1 - alpha_hat_t)) * pred_noise)
-                
-                if i > 1:
-                    noise = torch.randn_like(x)
-                    x = x + torch.sqrt(beta_t) * noise
-            x = torch.clamp(x, -1.0, 1.0)
+            x = (1 / torch.sqrt(alpha_t)) * (x - ((1 - alpha_t) / torch.sqrt(1 - alpha_hat_t)) * pred_noise)
+            
+            if i > 1:
+                noise = torch.randn_like(x)
+                x = x + torch.sqrt(beta_t) * noise
+        
+        x = torch.clamp(x, -1.0, 1.0)
+
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)
         logger.info(f"Created {n_samples} samples")
+
         self.model.train()
         return x.cpu().numpy()
 
+    def bwd_diffusion_ddim(self, n_samples: int = 8, sampling_timesteps: int = 50, eta: float = 0.0) -> ndarray:
+        """The bwd diffusion process as DDIM.
+
+        Args:
+            n_samples (int, optional): Number of samples to generate. If model contains batch norm creating >1 sample is more efficient. Defaults to 8.
+            sampling_timesteps (int, optional): Number of actual sampling timesteps. Defaults to 50.
+            eta: Stochasticity parameter (0.0 for deterministic, 1.0 for DDPM-like stochasticity). Defaults to 0. 
+
+        Returns:
+            ndarray: The generated samples.
+        """
+        logger.info(f"Started sampling {n_samples} samples")
+        self.model.eval()
+        timesteps = self.T
+        
+        timesteps_ind = torch.linspace(0, timesteps - 1, steps=sampling_timesteps)
+
+        x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
+        
+        for i in reversed(range(1, sampling_timesteps)):
+            if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {timesteps - i}/{timesteps} X min/max: {torch.min(x).item()}, {torch.max(x).item()}", end='', flush=True)
+
+            t = timesteps_ind[i]
+            t_prev = timesteps_ind[i - 1]
+
+            alpha_hat_t = self.alpha_hat[t]
+            alpha_hat_prev = self.alpha_hat[t_prev]
+            t = torch.full((n_samples,), i, dtype=torch.long, device=self.device)
+            with torch.no_grad():
+                pred_noise = self.model(x, t)
+            
+            sigma_t = eta * torch.sqrt((1 - alpha_hat_prev) / (1 - alpha_hat_t)) * torch.sqrt(1 - alpha_hat_t / alpha_hat_prev)
+
+            x0_pred = (x - torch.sqrt(1 - alpha_hat_t) * pred_noise) / torch.sqrt(alpha_hat_t)
+            x = torch.sqrt(alpha_hat_prev) * x0_pred + torch.sqrt(1 - alpha_hat_prev - sigma_t**2) * pred_noise
+
+            if eta > 0 and i > 1:
+                x += sigma_t * torch.randn_like(x)
+        
+        x = torch.clamp(x, -1.0, 1.0)
+
+        if logger.getEffectiveLevel() == LIGHT_DEBUG:
+            print(flush=True)
+        logger.info(f"Created {n_samples} samples")
+
+        self.model.train()
+        return x.cpu().numpy()
     
     def visualize_diffusion_steps(self, x: Tensor, n_spectograms: int = 5) -> None:
         """Visualizes the noise schedule applied to a spectogram.
@@ -254,3 +306,4 @@ class Diffusion():
             
             logger.info(f"Visualizing spectrogram at timestep t={t}")
             visualize_spectogram(x_t[0, 0].cpu().numpy())
+
