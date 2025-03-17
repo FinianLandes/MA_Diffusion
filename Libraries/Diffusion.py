@@ -13,7 +13,6 @@ from .U_Net import *
 
 logger = logging.getLogger(__name__)
 
-
 class Diffusion():
     """The DDPM & DDIM class.
     """
@@ -65,7 +64,7 @@ class Diffusion():
     
     def cosine_noise_schedule(self, zero_offset: float = 0.008) -> Tensor:
         ...
-    
+
     def noise_data(self, x: Tensor, t: Tensor) -> tuple[Tensor, Tensor]:
         """Adds noise to the data according to the noise schedule and the timesteps.
 
@@ -155,7 +154,7 @@ class Diffusion():
             loss_list.append(avg_loss)
 
             if lr_scheduler is not None:
-                if isinstance(lr_scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                if isinstance(lr_scheduler, (optim.lr_scheduler.ReduceLROnPlateau, Threshold_LR)):
                     lr_scheduler.step(avg_loss)
                 else:
                     lr_scheduler.step()
@@ -250,7 +249,7 @@ class Diffusion():
         self.model.eval()
         timesteps = self.T
         
-        timesteps_ind = torch.linspace(0, timesteps - 1, steps=sampling_timesteps)
+        timesteps_ind = torch.linspace(0, timesteps - 1, steps=sampling_timesteps, dtype=torch.long, device=self.device)
 
         x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
         
@@ -274,8 +273,6 @@ class Diffusion():
 
             if eta > 0 and i > 1:
                 x += sigma_t * torch.randn_like(x)
-        
-        x = torch.clamp(x, -1.0, 1.0)
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)

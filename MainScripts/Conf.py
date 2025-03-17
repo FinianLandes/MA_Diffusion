@@ -21,7 +21,7 @@ class Models:
     n_starting_filters: int = 32
     n_downsamples: int = 4
     time_embed_dim: int = 128
-    diffusion_timesteps: int = 500
+    diffusion_timesteps: int = 1000
     batch_size: int = 16
     gradient_accum: int = 2
 

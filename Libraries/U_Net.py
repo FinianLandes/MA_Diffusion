@@ -2,6 +2,8 @@ import torch
 from torch import nn, Tensor, functional
 from torch.utils.data import DataLoader
 import torch.optim as optim
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim import Optimizer
 import numpy as np
 from numpy import ndarray
 from typing import Callable
@@ -13,17 +15,19 @@ logger = logging.getLogger(__name__)
 class Down(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, time_embed_dim: int, activation: nn.Module = nn.GELU()) -> None:
         super(Down, self).__init__()
-        self.seq = nn.Sequential(
-            nn.MaxPool2d(kernel_size=2, stride=2),
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.seq = nn.ModuleList([
             DoubleConv(in_channels, in_channels, residual=True, activation=activation),
             DoubleConv(in_channels, out_channels, activation=activation)
-        )
+        ])
         self.time_seq = nn.Sequential(
             nn.SiLU(),
             nn.Linear(time_embed_dim, out_channels)
         )
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        x = self.seq(x)
+        x = self.pool(x)
+        for  layer in self.seq:
+            x = layer(x, t)
         t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
         return x + t_emb
 
@@ -32,10 +36,10 @@ class Up(nn.Module):
         super(Up, self).__init__()
         self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
         self.half_channels = nn.Conv2d(in_channels * 2, in_channels, kernel_size=3, stride=1, padding=1)
-        self.seq = nn.Sequential(
+        self.seq = nn.ModuleList([
             DoubleConv(in_channels, in_channels, residual=True, activation=activation),
             DoubleConv(in_channels, out_channels, in_channels // 2, activation=activation)
-        )
+        ])
         self.time_seq = nn.Sequential(
             nn.SiLU(),
             nn.Linear(time_embed_dim, out_channels)
@@ -44,7 +48,8 @@ class Up(nn.Module):
         x = torch.cat([x, x_skip], dim=1)
         x = self.half_channels(x)
         x = self.upsample(x)
-        x = self.seq(x)
+        for  layer in self.seq:
+            x = layer(x, t)
         t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
         return x + t_emb
 
@@ -55,7 +60,7 @@ class DoubleConv(nn.Module):
         self.activation = activation
         if mid_channels is None:
             mid_channels = out_channels
-        self.seq = nn.ModuleList(
+        self.seq = nn.ModuleList([
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(1, mid_channels),
             Modulation(mid_channels, time_embed_dim),
@@ -63,7 +68,7 @@ class DoubleConv(nn.Module):
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.GroupNorm(1, out_channels),
             Modulation(out_channels, time_embed_dim)
-        )
+        ])
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
         identity: Tensor = x
         for layer in self.seq:
@@ -101,11 +106,11 @@ class Conv_U_NET(nn.Module):
                 )
             self.encoder.append(nn.ModuleList(down_seq))
 
-        self.bottleneck = nn.Sequential(
+        self.bottleneck = nn.ModuleList([
             DoubleConv(n_starting_filters * (2 ** n_downsamples), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
             DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation),
             DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** n_downsamples), activation=activation)
-        )
+        ])
 
         self.decoder = nn.ModuleList()
         for i in reversed(range(n_downsamples)):
@@ -134,14 +139,17 @@ class Conv_U_NET(nn.Module):
 
         for block in self.encoder:
             x = block[0](x, t)
-            x = block[1](x)
+            x = block[1](x, t)
             skip_sols.append(x)
-        x = self.bottleneck(x)
+        
+        for layer in self.bottleneck:
+            x = layer(x, t)
+
         skip_sols = skip_sols[::-1]
 
         for i, block in enumerate(self.decoder):
             x = block[0](x, skip_sols[i], t)
-            x = block[1](x)
+            x = block[1](x, t)
         out: Tensor = self.out_lay(x)
         return out
     
@@ -158,3 +166,25 @@ class Conv_U_NET(nn.Module):
             s += f"  Decoder[{i}]: {module}\n"
         s += f"Output Layer: {self.out_lay}\n"
         return s
+
+class Threshold_LR(_LRScheduler):
+    def __init__(self, optimizer: Optimizer, thresholds: list, lr: list, last_epoch: int = -1, verbose: bool = False) -> None:
+        self.thresholds = thresholds
+        self.lr = lr
+        self.current_loss = float('inf')
+        super().__init__(optimizer, last_epoch, verbose)
+    
+    def get_lr(self) -> list:
+        for i, threshold in enumerate(self.thresholds):
+            if self.current_loss > threshold:
+                lr_idx = max(0, i - 1)
+                break
+            else:
+                lr_idx = len(self.lr) - 1 
+
+        return [self.lr[lr_idx] for _ in self.optimizer.param_groups]
+    
+    def step(self, loss: float = None, epoch: int = None) -> None:
+        if loss is not None:
+            self.current_loss = loss
+        super().step(epoch)

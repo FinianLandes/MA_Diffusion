@@ -8,7 +8,7 @@ import numpy as np
 from numpy import ndarray
 import matplotlib.pyplot as plt
 import librosa, os, logging, time, soundfile
-
+from scipy.signal import butter, lfilter
 #Logging
 LIGHT_DEBUG: int = 15
 
@@ -141,9 +141,9 @@ def del_if_exists(path: str) -> None:
     """
     if os.path.exists(path):
         os.remove(path)
-        logger.LIGHT_DEBUG(f"{path} deleted")
+        logger.light_debug(f"{path} deleted")
     else:
-        logger.LIGHT_DEBUG(f"{path} could not be deleted")
+        logger.light_debug(f"{path} could not be deleted")
 
 # Other Manipulations
 def split_audiofile(audio: ndarray, time: int, sample_rate: int = 44100, overlap_s: int = 0) -> ndarray:
@@ -407,6 +407,80 @@ def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int
     logger.light_debug(f"Reconstructed audio: {audio.shape}")
     return audio
 
+def sdr(audio: ndarray, sample_rate: int = 44100, cutoff: int = 4000) -> float:
+    """
+    Approximate SDR without a reference by comparing audio to a low-pass filtered version.
+    
+    Args:
+        audio (np.ndarray): Generated waveform.
+        sample_rate (int): Sampling rate in Hz.
+        cutoff (float): Cutoff frequency for low-pass filter (Hz).
+    
+    Returns:
+        float: SDR in dB.
+    """
+    nyquist = sample_rate / 2
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(4, normal_cutoff, btype='low', analog=False)
+    
+    smoothed_audio = lfilter(b, a, audio)
+    
+    signal_power = np.mean(np.square(smoothed_audio))
+
+    distortion = audio - smoothed_audio
+    distortion_power = np.mean(np.square(distortion))
+    
+    if distortion_power == 0:
+        return float('inf')
+    
+    sdr = 10 * np.log10(signal_power / distortion_power)
+    logger.light_debug("Calculated SDR")
+    return sdr
+
+def spectral_convergence(spectrogram: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True) -> float:
+    """Measure spectral convergence of a generated spectrogram.
+
+    Args:
+        spectrogram (ndarray): Spectogram.
+        len_fft (int, optional): STFT FFT length. Defaults to 1024.
+        hop_length (int, optional): STFT hop length. Defaults to 512.
+        sample_rate (int, optional): Samplerate. Defaults to 44100.
+        log (bool, optional): Set to true if spectogram is in log scale. Defaults to True.
+
+    Returns:
+        float: Spectral convergence score.
+    """
+    audio = spectrogram_to_audio(spectrogram, len_fft, hop_length, log)
+    
+    # Recompute STFT from the waveform
+    reconstructed_spec = np.abs(librosa.stft(audio, n_fft=len_fft, hop_length=hop_length))
+    
+    # Pad or trim to match original shape (224x416)
+    reconstructed_spec = reconstructed_spec[:spectrogram.shape[-2], :spectrogram.shape[-1]]
+    
+    diff = np.mean((spectrogram - reconstructed_spec) ** 2)
+    norm = np.mean(spectrogram ** 2)
+
+    if norm == 0:
+        return float('inf')
+    
+    return np.sqrt(diff / norm)
+
+def flatten(data: ndarray) -> ndarray:
+    """Flattens a 3D (N,H,W) to 2d (N,H*W).
+
+    Args:
+        data (ndarray): Array to flatten.
+
+    Returns:
+        ndarray: Flattened array.
+    """
+    N, H, W = data.shape
+    output: ndarray = np.zeros((N, H * W))
+    for i, file in enumerate(data):
+        output[i] = file.flatten()
+    return output
+
 
 # Visualize Data
 def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch", y_label: str = "Lr", color: str = "blue", switch_x_y: bool = True) -> None:
@@ -444,20 +518,6 @@ def visualize_spectogram(spectogram: ndarray, sample_rate: int = 44100, len_fft:
     librosa.display.specshow(spectogram, sr=sample_rate, n_fft=len_fft)
     plt.show()
 
-def flatten(data: ndarray) -> ndarray:
-    """Flattens a 3D (N,H,W) to 2d (N,H*W).
-
-    Args:
-        data (ndarray): Array to flatten.
-
-    Returns:
-        ndarray: Flattened array.
-    """
-    N, H, W = data.shape
-    output: ndarray = np.zeros((N, H * W))
-    for i, file in enumerate(data):
-        output[i] = file.flatten()
-    return output
 
 # Torch utils
 def count_parameters(model: nn.Module) -> int:
