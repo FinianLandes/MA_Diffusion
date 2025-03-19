@@ -224,8 +224,6 @@ class Diffusion():
             if i > 1:
                 noise = torch.randn_like(x)
                 x = x + torch.sqrt(beta_t) * noise
-        
-        x = torch.clamp(x, -1.0, 1.0)
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)
