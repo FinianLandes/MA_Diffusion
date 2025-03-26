@@ -14,9 +14,10 @@
 | >09.03.2025 | The outputs seemd to have gotten better, but still with a bad output range. Which led me to taking a closer look at my data which got me to the realisation that my normalization might be bad and signle sample might differ a lot due to the normalization taking the min and max value of a whole set rather than the individual sample.||
 | >15.03.2025 | Tried another training run with other schedulers a higher Lr seemd to be beneficial getting down to ~0.08. Also switch to Batchnorm but this seemed to have lead to numerical instability during inference so i switched back to groupnorm with 8 groups. After run 1 switched from GELU to SiLU just to see if it would make a difference.  |  |
 | >17.03.2025 | I finally got to a loss >0.08 using manipulation in my unet and a custom lr scheduler. The model now has 72M params. Trained with 4000 samples on another smaller model 18M params | |
+| >20.03.2025 | Removed modulation and trying to get back to model v3 which produced some outputs.| |
+| >24.03.2025 | Added extra  Skip connection. Matching the implementation of Luke Ditra.  | |
 
 ## General Info
-
 ### Directory Details
 
 - **Data**

@@ -6,10 +6,11 @@ from torch.optim.lr_scheduler import _LRScheduler
 import torch.optim as optim
 import numpy as np
 from numpy import ndarray
-import logging, time
+import logging, time, math
 from typing import Callable
 from .Utils import *
 from .U_Net import *
+from MainScripts.Conf import conf
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +63,13 @@ class Diffusion():
         """
         return torch.linspace(beta_start, beta_end, self.T)
     
-    def cosine_noise_schedule(self, zero_offset: float = 0.008) -> Tensor:
-        ...
+    def cos_f(self, t: int, s: float, e: float) -> float:
+        return math.cos(((t / self.T + s) / (1 + s)) * (math.pi / 2)) ** e
+    def cosine_noise_schedule(self, s: float = 8e-3, e: float = 2) -> Tensor:
+        f_t = [self.cos_f(t, s, e) for t in range(self.T)]
+        alpha_hat_t = [f / f_t[0] for f in f_t]
+        alpha = [alpha_hat_t[0]] + [alpha_hat_t[i] / alpha_hat_t[i - 1] for i in range(1, self.T)]
+        return 1 - Tensor(alpha)
 
     def noise_data(self, x: Tensor, t: Tensor) -> tuple[Tensor, Tensor]:
         """Adds noise to the data according to the noise schedule and the timesteps.
@@ -73,7 +79,7 @@ class Diffusion():
             t (Tensor): the timesteps.
 
         Returns:
-            tuple[Tensor, Tensor]: THe noised data and the noise.
+            tuple[Tensor, Tensor]: The noised data and the noise.
         """
         e = torch.randn_like(x).to(self.device)
         return torch.sqrt(self.alpha_hat[t]) * x + torch.sqrt(1 - self.alpha_hat[t]) * e, e
@@ -89,8 +95,8 @@ class Diffusion():
         """
         return torch.randint(0, self.T, (n,)).to(self.device)
     
-    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "", start_epoch: int = 0, patience: int = 20) -> list[float]:
-        """Training of the DDPM Model.
+    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "test_model", start_epoch: int = 0, patience: int = 20) -> list[float]:
+        """Training of the diffusion model.
 
         Args:
             epochs (int): number of epochs to train
@@ -100,7 +106,7 @@ class Diffusion():
             lr_scheduler (_LRScheduler, optional): An lr scheduler. Defaults to None.
             gradient_accum (int, optional): If >1 accumulates the gradients over the given number of batches. Defaults to 1.
             checkpoint_freq (int, optional): If >0 saves the model each n epochs. Defaults to 0.
-            model_path (str, optional): The model path to save the model to. Defaults to "".
+            model_path (str, optional): The model path to save the model to. Defaults to "test_model".
             start_epoch (int, optional): The starting epoch (just for logging reasons). Defaults to 0.
             patience (int, optional): If > 0 stops training if loss does not improve after given number of epochs. Defaults to 20.
 
@@ -120,8 +126,12 @@ class Diffusion():
 
         self.model.train()
         for e in range(0, epochs):
-            total_loss = 0
-            start_time = time.time()
+            total_loss: float = 0
+            min_noise = [0.0, 0.0]
+            max_noise = [0.0, 0.0]
+            std_noise = [0.0, 0.0]
+            mean_noise = [0.0, 0.0]
+            start_time: float = time.time()
             optimizer.zero_grad()
 
             for b_idx, (x, _) in enumerate(data_loader):
@@ -145,7 +155,16 @@ class Diffusion():
                     optimizer.zero_grad()
 
                 if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {b_idx + 1:02d}/{len(data_loader):02d}", end='', flush=True)
+                    min_noise[0] = min(torch.min(pred_noise).item(), min_noise[0])
+                    min_noise[1] = min(torch.min(noise).item(), min_noise[1])
+                    max_noise[0] = max(torch.max(pred_noise).item(), max_noise[0])
+                    max_noise[1] = max(torch.max(noise).item(), max_noise[1])
+                    std_noise[0] += torch.std(pred_noise).item()
+                    std_noise[1] += torch.std(noise).item()
+                    mean_noise[0] += torch.mean(pred_noise).item()
+                    mean_noise[1] += torch.mean(noise).item()
+                    current_batch = b_idx + 1
+                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {current_batch:02d}/{len(data_loader):02d} Pred noise min/max: {min_noise[0]:.5f}, {max_noise[0]:.5f} std/mean: {std_noise[0] / current_batch:.5f}, {mean_noise[0] / current_batch:.5f} Real noise min/max: {min_noise[1]:.5f}, {max_noise[1]:.5f} std/mean: {std_noise[1] / current_batch:.5f}, {mean_noise[1] / current_batch:.5f} ", end='', flush=True)
 
             if logger.getEffectiveLevel() == LIGHT_DEBUG:
                 print(flush=True)
@@ -174,7 +193,7 @@ class Diffusion():
             total_time += epoch_time
             remaining_time = int((total_time / (e + 1)) * (epochs - e - 1))
 
-            logger.info(f"Epoch {e + 1 + start_epoch:03d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e}")
+            logger.info(f"Epoch {e + 1 + start_epoch:03d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e} ")
             
             if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
                 checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1:03d}.pth"
@@ -193,11 +212,12 @@ class Diffusion():
         
         return loss_list
     
-    def bwd_diffusion_ddpm(self, n_samples: int = 8) -> ndarray:
+    def bwd_diffusion_ddpm(self, n_samples: int = 8, visual_freq: int = 0) -> ndarray:
         """The bwd diffusion process with DDPM.
 
         Args:
             n_samples (int, optional): Number of samples to generate. If model contains batch norm creating >1 sample is more efficient. Defaults to 8.
+            visual_freq (int, optional): If >0 visualizes the spectogram each n steps. Defaults to 0.
 
         Returns:
             ndarray: The generated samples.
@@ -208,9 +228,8 @@ class Diffusion():
 
         x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
         for i in reversed(range(1, timesteps)):
-            if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {timesteps - i}/{timesteps} X min/max: {torch.min(x).item()}, {torch.max(x).item()}", end='', flush=True)
-            
+            x = x / (x.std() + 1e-8)
+
             t = torch.full((n_samples,), i, dtype=torch.long, device=self.device)
             with torch.no_grad():
                 pred_noise = self.model(x, t)
@@ -224,21 +243,30 @@ class Diffusion():
             if i > 1:
                 noise = torch.randn_like(x)
                 x = x + torch.sqrt(beta_t) * noise
+            
+            if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {timesteps - i}/{timesteps} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} noise min/max: {torch.min(pred_noise).item():.5f}, {torch.max(pred_noise).item():.5f} std/mean: {torch.std(pred_noise).item():.5f}, {torch.mean(pred_noise).item():.5f} ", end='', flush=True)
+            
+            if visual_freq > 0 and i % visual_freq == 0:
+                visualize_spectogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
+
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)
+        logger.light_debug(f"Final X min/max before return: {torch.min(x).item():.5f}, {torch.max(x).item():.5f}")
         logger.info(f"Created {n_samples} samples")
 
         self.model.train()
         return x.cpu().numpy()
 
-    def bwd_diffusion_ddim(self, n_samples: int = 8, sampling_timesteps: int = 50, eta: float = 0.0) -> ndarray:
+    def bwd_diffusion_ddim(self, n_samples: int = 8, sampling_timesteps: int = 50, eta: float = 0.0, visual_freq: int = 0) -> ndarray:
         """The bwd diffusion process as DDIM.
 
         Args:
             n_samples (int, optional): Number of samples to generate. If model contains batch norm creating >1 sample is more efficient. Defaults to 8.
             sampling_timesteps (int, optional): Number of actual sampling timesteps. Defaults to 50.
             eta: Stochasticity parameter (0.0 for deterministic, 1.0 for DDPM-like stochasticity). Defaults to 0. 
+            visual_freq (int, optional): If >0 visualizes the spectogram each n steps. Defaults to 0.
 
         Returns:
             ndarray: The generated samples.
@@ -252,9 +280,6 @@ class Diffusion():
         x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
         
         for i in reversed(range(1, sampling_timesteps)):
-            if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {timesteps - i}/{timesteps} X min/max: {torch.min(x).item()}, {torch.max(x).item()}", end='', flush=True)
-
             t = timesteps_ind[i]
             t_prev = timesteps_ind[i - 1]
 
@@ -271,6 +296,12 @@ class Diffusion():
 
             if eta > 0 and i > 1:
                 x += sigma_t * torch.randn_like(x)
+            
+            if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {sampling_timesteps - i}/{sampling_timesteps} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} noise min/max: {torch.min(pred_noise).item():.5f}, {torch.max(pred_noise).item():.5f} std/mean: {torch.std(pred_noise).item():.5f}, {torch.mean(pred_noise).item():.5f} ", end='', flush=True)
+            
+            if visual_freq > 0 and i % visual_freq == 0:
+                visualize_spectogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)

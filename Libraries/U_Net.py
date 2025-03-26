@@ -12,91 +12,104 @@ from .Utils import *
 
 logger = logging.getLogger(__name__)
 
+class ConditionalNorm(nn.Module):
+    def __init__(self, channels: int, time_embed_dim: int = 128, num_groups: int = 8) -> None:
+        super(ConditionalNorm, self).__init__()
+        self.channels = channels
+        self.norm = nn.GroupNorm(num_groups, channels)
+        self.t_weight = nn.Linear(time_embed_dim, channels)
+        self.t_bias = nn.Linear(time_embed_dim, channels)
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        x = self.norm(x)
+        weight: Tensor = self.t_weight(t)
+        bias: Tensor = self.t_bias(t)
+        x = x * weight.view(-1, self.channels, 1, 1) + bias.view(-1, self.channels, 1, 1)
+        return x
+
+
+
 class Down(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, time_embed_dim: int, activation: nn.Module = nn.GELU(),use_modulation: bool = True) -> None:
+    def __init__(self, in_channels: int, out_channels: int, time_embed_dim: int = 128, activation: nn.Module = nn.GELU(), conditional_norm: bool = False) -> None:
         super(Down, self).__init__()
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.cond_norm = conditional_norm
         self.seq = nn.ModuleList([
-            DoubleConv(in_channels, in_channels, residual=True, activation=activation, use_modulation=use_modulation),
-            DoubleConv(in_channels, out_channels, activation=activation, use_modulation=use_modulation)
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            DoubleConv(in_channels, in_channels, residual=True, time_embed_dim=time_embed_dim, activation=activation, conditional_norm=conditional_norm),
+            DoubleConv(in_channels, out_channels, time_embed_dim=time_embed_dim, activation=activation, conditional_norm=conditional_norm)
         ])
         self.time_seq = nn.Sequential(
             nn.SiLU(),
             nn.Linear(time_embed_dim, out_channels)
         )
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        x = self.pool(x)
-        for  layer in self.seq:
-            x = layer(x, t)
-        t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
-        return x + t_emb
-
-class Up(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, time_embed_dim: int, activation: nn.Module = nn.GELU(), use_modulation: bool = True) -> None:
-        super(Up, self).__init__()
-        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        self.half_channels = nn.Conv2d(in_channels * 2, in_channels, kernel_size=3, stride=1, padding=1)
-        self.seq = nn.ModuleList([
-            DoubleConv(in_channels, in_channels, residual=True, activation=activation, use_modulation=use_modulation),
-            DoubleConv(in_channels, out_channels, in_channels // 2, activation=activation, use_modulation=use_modulation)
-        ])
-        self.time_seq = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(time_embed_dim, out_channels)
-        )
-    def forward(self, x: Tensor, x_skip: Tensor, t: Tensor) -> Tensor:
-        x = torch.cat([x, x_skip], dim=1)
-        x = self.half_channels(x)
-        x = self.upsample(x)
-        for  layer in self.seq:
-            x = layer(x, t)
-        t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
-        return x + t_emb
-
-class DoubleConv(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, mid_channels: int = None, time_embed_dim: int = 128, residual: bool = False, activation: nn.Module = nn.GELU(), use_modulation: bool = True) -> None:
-        super(DoubleConv, self).__init__()
-        self.residual = residual
-        self.activation = activation
-        self.use_modulation = use_modulation
-        if mid_channels is None:
-            mid_channels = out_channels
-        self.module_list = [
-            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(1, mid_channels),
-            Modulation(mid_channels, time_embed_dim) if use_modulation else None,
-            self.activation, 
-            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(1, out_channels),
-            Modulation(out_channels, time_embed_dim) if use_modulation else None,
-            self.activation
-        ]
-        self.seq = nn.ModuleList([layer for layer in self.module_list if layer is not None])
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        identity: Tensor = x
         for layer in self.seq:
-            if isinstance(layer, Modulation):
+            if isinstance(layer, DoubleConv):
                 x = layer(x, t)
             else:
                 x = layer(x)
+        if not self.cond_norm:
+            t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
+            x = x + t_emb
+        return x
+
+class Up(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, time_embed_dim: int = 128, activation: nn.Module = nn.GELU(), conditional_norm: bool = False) -> None:
+        super(Up, self).__init__()
+        self.cond_norm = conditional_norm
+        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.half_channels = nn.Conv2d(in_channels * 2, in_channels, kernel_size=3, stride=1, padding=1)
+        self.seq = nn.Sequential(
+            self.half_channels,
+            self.upsample,
+            DoubleConv(in_channels, in_channels, residual=True, time_embed_dim=time_embed_dim, activation=activation, conditional_norm=conditional_norm),
+            DoubleConv(in_channels, out_channels, in_channels // 2, time_embed_dim=time_embed_dim, activation=activation, conditional_norm=conditional_norm)
+        )
+        self.time_seq = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(time_embed_dim, out_channels)
+        )
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        for layer in self.seq:
+            if isinstance(layer, DoubleConv):
+                x = layer(x, t)
+            else:
+                x = layer(x)
+        if not self.cond_norm:
+            t_emb = self.time_seq(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
+            x = x + t_emb
+        return x
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, mid_channels: int = None, residual: bool = False, time_embed_dim: int = 128, activation: nn.Module = nn.GELU(), conditional_norm: bool = False) -> None:
+        super(DoubleConv, self).__init__()
+        self.cond_norm = conditional_norm
+        self.residual = residual
+        self.activation = activation
+        if mid_channels is None:
+            mid_channels = out_channels
+        self.seq = nn.ModuleList([
+            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
+            ConditionalNorm(mid_channels, time_embed_dim=time_embed_dim, num_groups=8) if self.cond_norm else nn.GroupNorm(8, mid_channels),
+            self.activation, 
+            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            ConditionalNorm(out_channels, time_embed_dim=time_embed_dim, num_groups=8) if self.cond_norm else nn.GroupNorm(8, out_channels),
+            self.activation
+        ])
+    def forward(self, x: Tensor, t: Tensor = None) -> Tensor:
+        identity: Tensor = x
+        for layer in self.seq:
+            if isinstance(layer, ConditionalNorm):
+                x = layer(x, t)
+            else:
+                x = layer(x)
+
         if self.residual:
             return x + identity
         else: 
             return x
 
-class Modulation(nn.Module):
-    def __init__(self, channels: int, time_embed_dim: int) -> None:
-        super(Modulation, self).__init__()
-        self.scale = nn.Linear(time_embed_dim, channels)
-        self.shift = nn.Linear(time_embed_dim, channels)
-    
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        scale = self.scale(t).view(-1, x.shape[1], 1, 1)
-        shift = self.shift(t).view(-1, x.shape[1], 1, 1)
-        return x * (1 + scale) + shift
-
 class Conv_U_NET(nn.Module):
-    def __init__(self, in_channels: int = 1, time_embed_dim: int = 256, n_starting_filters: int = 32, n_downsamples: int = 3, activation: nn.Module = nn.GELU(), use_modulation: bool = False,  device: str = "cpu") -> None:
+    def __init__(self, in_channels: int = 1, time_embed_dim: int = 256, n_starting_filters: int = 32, n_downsamples: int = 3, activation: nn.Module = nn.GELU(), conditional_norm: bool = False,  device: str = "cpu") -> None:
         super(Conv_U_NET, self).__init__()
         self.device = device
         self.time_embed_dim = time_embed_dim
@@ -104,26 +117,26 @@ class Conv_U_NET(nn.Module):
         self.encoder = nn.ModuleList()
         for i in range(n_downsamples):
             down_seq = nn.Sequential(
-                Down(n_starting_filters * (2 ** i), n_starting_filters * (2 ** (i + 1)), time_embed_dim, activation, use_modulation=use_modulation),
-                DoubleConv(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** (i + 1)), residual=True, activation=activation, use_modulation=use_modulation)
+                Down(n_starting_filters * (2 ** i), n_starting_filters * (2 ** (i + 1)), activation=activation, time_embed_dim=time_embed_dim, conditional_norm=conditional_norm),
+                DoubleConv(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** (i + 1)), residual=True, activation=activation, time_embed_dim=time_embed_dim, conditional_norm=conditional_norm)
                 )
             self.encoder.append(nn.ModuleList(down_seq))
 
         self.bottleneck = nn.ModuleList([
-            DoubleConv(n_starting_filters * (2 ** n_downsamples), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation, use_modulation=use_modulation),
-            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation, use_modulation=use_modulation),
-            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** n_downsamples), activation=activation, use_modulation=use_modulation)
+            DoubleConv(n_starting_filters * (2 ** n_downsamples), n_starting_filters * (2 ** (n_downsamples + 1)), activation=activation, time_embed_dim=time_embed_dim, conditional_norm=conditional_norm),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** (n_downsamples + 1)), residual=True, activation=activation, time_embed_dim=time_embed_dim, conditional_norm=conditional_norm),
+            DoubleConv(n_starting_filters * (2 ** (n_downsamples + 1)), n_starting_filters * (2 ** n_downsamples), activation=activation, time_embed_dim=time_embed_dim, conditional_norm=conditional_norm)
         ])
 
         self.decoder = nn.ModuleList()
         for i in reversed(range(n_downsamples)):
             up_seq = nn.Sequential(
-                Up(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** i), time_embed_dim, activation, use_modulation=use_modulation),
-                DoubleConv(n_starting_filters * (2 ** i), n_starting_filters * (2 ** i), residual=True, activation=activation, use_modulation=use_modulation)
+                Up(n_starting_filters * (2 ** (i + 1)), n_starting_filters * (2 ** i), activation=activation, time_embed_dim=time_embed_dim, conditional_norm=conditional_norm),
+                DoubleConv(n_starting_filters * (2 ** i), n_starting_filters * (2 ** i), residual=True, activation=activation, time_embed_dim=time_embed_dim, conditional_norm=conditional_norm)
             )
             self.decoder.append(nn.ModuleList(up_seq))
 
-        self.out_lay = nn.Conv2d(n_starting_filters, in_channels, kernel_size=1)
+        self.out_lay = nn.Conv2d(n_starting_filters * 2, in_channels, kernel_size=1)
 
     
     def time_embed(self, t: Tensor, channels: int) -> Tensor:
@@ -139,6 +152,7 @@ class Conv_U_NET(nn.Module):
         t = self.time_embed(t, self.time_embed_dim)
 
         x = self.inp_lay(x)
+        skip_sols.append(x)
 
         for block in self.encoder:
             x = block[0](x, t)
@@ -151,14 +165,16 @@ class Conv_U_NET(nn.Module):
         skip_sols = skip_sols[::-1]
 
         for i, block in enumerate(self.decoder):
-            x = block[0](x, skip_sols[i], t)
+            x = torch.cat([x, skip_sols[i]], 1)
+            x = block[0](x, t)
             x = block[1](x, t)
+        
+        x = torch.cat([x, skip_sols[-1]], dim=1)
         out: Tensor = self.out_lay(x)
         return out
     
     def __repr__(self) -> str:
-        s = super().__repr__() + "\n"
-        s += "Encoder:\n"
+        s = "Encoder:\n"
         s += f"Input Layer: {self.inp_lay}\n"
         for i, module in enumerate(self.encoder):
             s += f"  Encoder[{i}]: {module}\n"
