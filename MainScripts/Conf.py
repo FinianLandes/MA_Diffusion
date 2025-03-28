@@ -18,7 +18,7 @@ class Audio:
 
 class Models:
     """Hyperparameters and architecture for u-net and diffusion."""
-    n_starting_filters: int = 32
+    n_starting_filters: int = 48
     n_downsamples: int = 3
     time_embed_dim: int = 128
     diffusion_timesteps: int = 1000

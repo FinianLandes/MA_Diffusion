@@ -15,7 +15,7 @@
 | >15.03.2025 | Tried another training run with other schedulers a higher Lr seemd to be beneficial getting down to ~0.08. Also switch to Batchnorm but this seemed to have lead to numerical instability during inference so i switched back to groupnorm with 8 groups. After run 1 switched from GELU to SiLU just to see if it would make a difference.  |  |
 | >17.03.2025 | I finally got to a loss >0.08 using manipulation in my unet and a custom lr scheduler. The model now has 72M params. Trained with 4000 samples on another smaller model 18M params | |
 | >20.03.2025 | Removed modulation and trying to get back to model v3 which produced some outputs.| |
-| >24.03.2025 | Added extra  Skip connection. Matching the implementation of Luke Ditra.  | |
+| >24.03.2025 | Added extra  Skip connection. Matching the implementation of Luke Ditra. This is now giving me some results again, seemingly training is not completely stable as after some epochs all highs seem to get removed but with low epoch counts the outputs are very noisy  | |
 
 ## General Info
 ### Directory Details
@@ -63,10 +63,33 @@
   - `time`
   - `typing`
 
+### Neural Nets
+
+Inorder to view the Neural Nets Netron can be used with .pt files the code for the generation of this file can be found in the eval file.
+
 ### Logging
 
 This codebase is based on the logging module. For the minimal output set logging level to `logging.INFO`. Due to the immense output of some libraries in `logging.DEBUG` mode i added a custom mode between `DEBUG` and `INFO`. Inorder to use this level which prints a lot of info in the custom implemented functions set debug level to `LIGHT_DEBUG`. This is defined in the `conf.py` file.
 
-### Other Info
+### Data
 
-- If training is started the initial loss should be around `1.0` due to the `MSE Loss` if the loss after epoch 1 is significantly off there might be an issue.
+The dataset is created in the preprocessing file. The Model is trained on 4s mono samples with a sample rate of 32Khz. The STFT spectograms then are created with an FFT length of 480 and a HOP length of 288. The spectrograms then are resized to the closest multiple of 32 which makes divisions in the UNET easy. This results in spectograms of shape 1x224x416.
+
+## Sources
+
+### Papers
+
+- [Original DDPM Paper(Sohl-Dickstein et. al 2015)](http://arxiv.org/pdf/1503.03585)
+- [DDPM(Ho et. al 2020)](https://arxiv.org/pdf/2006.11239) (This is the most useful one and the one most of my implementation is based on).
+- [Improved DDPM(Nichol et. al 2021)](https://arxiv.org/pdf/2102.09672) (Explanation of cosine schedule).
+- [DDIM(Song et. al 2022)](https://arxiv.org/pdf/2010.02502) (The faster generation method).
+- [Diffusion for music gen. ETH (Flavio Schneider 2023)](https://arxiv.org/pdf/2301.13267) (A good overview over methods).
+
+### Youtube Videos
+
+- [Paper explanation by Outlier](https://www.youtube.com/watch?v=HoKDTa5jHvg)
+- [Implementation by Outlier](https://www.youtube.com/watch?v=TBCRlnwJtZU)
+- [Explanation by ExplainingAI](https://www.youtube.com/watch?v=H45lF4sUgiE)
+- [Implemtation by ExplainingAI](https://www.youtube.com/watch?v=vu6eKteJWew)
+- [Explanation UNET by rupert ai](https://www.youtube.com/watch?v=NhdzGfB1q74)
+
