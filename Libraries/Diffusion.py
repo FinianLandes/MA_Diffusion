@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class Diffusion():
     """The DDPM & DDIM class.
     """
-    def __init__(self, model: nn.Module, noise_steps: int, noise_schedule: str = "linear", input_dim: list = [1, 1, 1024, 672], device: str = "cpu") -> None:
+    def __init__(self, model: nn.Module, noise_steps: int, noise_schedule: str = "linear", input_dim: list = [1, 1, 1024, 672], device: str = "cpu", ema: EMA = None) -> None:
         """Initializer for the DDPM class.
 
         Args:
@@ -26,6 +26,7 @@ class Diffusion():
             noise_schedule (str, optional): The noise schedule type. Defaults to "cosine".
             input_dim (list, optional): The input shape in format (B, C, H, W). Defaults to [1, 1, 1024, 672].
             device (str, optional): The training device. Defaults to "cpu".
+            ema (EMA, optional): The model wrapped in the ema class. Defaults to none
         """
         self.model = model
         self.T = noise_steps
@@ -34,6 +35,7 @@ class Diffusion():
         self.beta = self.get_noise_schedule(noise_schedule).to(self.device)[:, None, None, None]
         self.alpha = 1 - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
+        self.ema = ema
     
     def get_noise_schedule(self, noise_type: str = "linear") -> Tensor:
         """Gets a noise schedule.
@@ -95,7 +97,7 @@ class Diffusion():
         """
         return torch.randint(0, self.T, (n,)).to(self.device)
     
-    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "test_model", start_epoch: int = 0, patience: int = 20) -> list[float]:
+    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "test_model", start_epoch: int = 0, patience: int = 20, ema_freq: int = 10) -> list[float]:
         """Training of the diffusion model.
 
         Args:
@@ -109,6 +111,7 @@ class Diffusion():
             model_path (str, optional): The model path to save the model to. Defaults to "test_model".
             start_epoch (int, optional): The starting epoch (just for logging reasons). Defaults to 0.
             patience (int, optional): If > 0 stops training if loss does not improve after given number of epochs. Defaults to 20.
+            ema_freq (int, optional): Updates ema if given every n batches. Defaults to 10.
 
         Returns:
             list[float]: The epochs avg. losses as a list.
@@ -165,6 +168,10 @@ class Diffusion():
                     mean_noise[1] += torch.mean(noise).item()
                     current_batch = b_idx + 1
                     print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {current_batch:02d}/{len(data_loader):02d} Pred noise min/max: {min_noise[0]:.5f}, {max_noise[0]:.5f} std/mean: {std_noise[0] / current_batch:.5f}, {mean_noise[0] / current_batch:.5f} Real noise min/max: {min_noise[1]:.5f}, {max_noise[1]:.5f} std/mean: {std_noise[1] / current_batch:.5f}, {mean_noise[1] / current_batch:.5f} ", end='', flush=True)
+                
+                if self.ema is not None and ((b_idx + 1) % ema_freq == 0 or (b_idx + 1) == len(data_loader)):
+                    self.ema.update()
+                    
 
             if logger.getEffectiveLevel() == LIGHT_DEBUG:
                 print(flush=True)
@@ -197,13 +204,13 @@ class Diffusion():
             
             if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
                 checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1:03d}.pth"
-                torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
+                torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(),"ema_state": self.ema.shadow, "epoch": e + 1}, checkpoint_path)
                 if e + 1 != checkpoint_freq:
                     last_path: str = f"{model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
                     del_if_exists(last_path)
                 logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
 
-        torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(), "epoch": e + 1}, model_path)
+        torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(), "ema_state": self.ema.shadow, "epoch": e + 1}, model_path)
         logger.light_debug(f"Saved model to {model_path}")
 
         if checkpoint_freq > 0:
@@ -224,6 +231,8 @@ class Diffusion():
         """
         logger.info(f"Started sampling {n_samples} samples")
         self.model.eval()
+        self.ema.apply_shadow()
+
         timesteps = self.T
 
         x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
@@ -257,6 +266,7 @@ class Diffusion():
         logger.info(f"Created {n_samples} samples")
 
         self.model.train()
+        self.ema.restore()
         return x.cpu().numpy()
 
     def bwd_diffusion_ddim(self, n_samples: int = 8, sampling_timesteps: int = 50, eta: float = 0.0, visual_freq: int = 0) -> ndarray:
@@ -273,6 +283,7 @@ class Diffusion():
         """
         logger.info(f"Started sampling {n_samples} samples")
         self.model.eval()
+        self.ema.apply_shadow()
         timesteps = self.T
         
         timesteps_ind = torch.linspace(0, timesteps - 1, steps=sampling_timesteps, dtype=torch.long, device=self.device)
@@ -308,6 +319,7 @@ class Diffusion():
         logger.info(f"Created {n_samples} samples")
 
         self.model.train()
+        self.ema.restore()
         return x.cpu().numpy()
     
     def visualize_diffusion_steps(self, x: Tensor, n_spectograms: int = 5) -> None:
