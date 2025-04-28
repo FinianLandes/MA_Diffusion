@@ -16,6 +16,8 @@
 | >17.03.2025 | I finally got to a loss >0.08 using manipulation in my unet and a custom lr scheduler. The model now has 72M params. Trained with 4000 samples on another smaller model 18M params | |
 | >20.03.2025 | Removed modulation and trying to get back to model v3 which produced some outputs.| |
 | >24.03.2025 | Added extra  Skip connection. Matching the implementation of Luke Ditra. This is now giving me some results again, seemingly training is not completely stable as after some epochs all highs seem to get removed but with low epoch counts the outputs are very noisy  | |
+| >23.04.2025 | Added more blocks and structures to the unet file, also created a new unet more based on the one proposed by Flavio schneider, but having size and memory issues there. ||
+| >28.04.2025 | Training on the cifar10 dataset now to test the architecture and also to compare the results to the unetV0 by Flavio schneider for Archisound. | |
 
 ## General Info
 ### Directory Details

@@ -22,7 +22,7 @@ class Models:
     n_downsamples: int = 3
     time_embed_dim: int = 128
     diffusion_timesteps: int = 1000
-    batch_size: int = 16
+    batch_size: int = 4
     gradient_accum: int = 2
 
 conf = {
