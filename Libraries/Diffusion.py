@@ -34,7 +34,10 @@ class Diffusion():
         self.inp_dim = input_dim
         self.device = device
         self.v_obj = v_obj
-        if self.v_obj:
+        self.beta = None
+        self.alpha = None
+        self.alpha_hat = None
+        if not self.v_obj:
             self.beta = self.get_noise_schedule(noise_schedule).to(self.device)[:, None, None, None]
             self.alpha = 1 - self.beta
             self.alpha_hat = torch.cumprod(self.alpha, dim=0)
@@ -42,9 +45,9 @@ class Diffusion():
     
     def get_semicircle_weights(self, sigma_t: Tensor) -> tuple[Tensor, ...]:
         phi_t = (np.pi / 2) * sigma_t
-        alpha = torch.cos(torch.tensor(phi_t))
-        beta = torch.sin(torch.tensor(phi_t))
-        return alpha, beta
+        alpha = torch.cos(phi_t)
+        beta = torch.sin(phi_t)
+        return alpha.view(-1, 1, 1, 1), beta.view(-1, 1, 1, 1)
     
     def noise_img_v_obj(self, x_0: Tensor, sigma_t: Tensor) -> tuple[Tensor, ...]:
         alpha, beta = self.get_semicircle_weights(sigma_t)
@@ -112,7 +115,7 @@ class Diffusion():
         """
         return torch.randint(0, self.T, (n,)).to(self.device)
     
-    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "test_model", start_epoch: int = 0, patience: int = 20, ema_freq: int = 10, validation_dataloader: DataLoader = None) -> list[float]:
+    def train(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "test_model", start_epoch: int = 0, patience: int = 20, ema_freq: int = 0, validation_dataloader: DataLoader = None) -> list[float]:
         """Training of the diffusion model.
 
         Args:
@@ -195,6 +198,7 @@ class Diffusion():
                 print(flush=True)
 
             if validation_dataloader is not None:
+                self.model.eval()
                 for (x, _) in validation_dataloader:
                     if x.dim() == 3:
                         x = x.to(self.device).unsqueeze(1)
@@ -203,11 +207,12 @@ class Diffusion():
                     timesteps = self.get_sampling_timesteps(x.shape[0])
                     x_t, noise = self.noise_data(x, timesteps)
                     
-                    with torch.autocast(device_type=self.device):
+                    with torch.no_grad():
                         pred_noise = self.model(x_t, timesteps)
                         validation_loss += loss_function(pred_noise, noise)
                 validation_loss = validation_loss / len(validation_dataloader)
                 val_loss_list.append(validation_loss)
+                self.model.train()
 
             avg_loss = total_loss / len(data_loader)
             loss_list.append(avg_loss)
@@ -248,9 +253,9 @@ class Diffusion():
                 logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
 
         if self.ema is not None:
-            torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(),"ema_state": self.ema.shadow, "epoch": e + 1}, checkpoint_path)
+            torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(),"ema_state": self.ema.shadow, "epoch": e + 1}, model_path)
         else:
-            torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
+            torch.save({"model": self.model.state_dict(), "optim": optimizer.state_dict(), "scheduler": lr_scheduler.state_dict(), "epoch": e + 1}, model_path)
 
         logger.light_debug(f"Saved model to {model_path}")
 
@@ -260,7 +265,7 @@ class Diffusion():
         
         return loss_list, val_loss_list
     
-    def train_v_obj(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "test_model", start_epoch: int = 0, patience: int = 20, ema_freq: int = 10, validation_dataloader: DataLoader = None) -> list[float]:
+    def train_v_obj(self, epochs: int, data_loader: DataLoader, loss_function: Callable, optimizer: Optimizer, lr_scheduler: _LRScheduler = None, gradient_accum: int = 1, checkpoint_freq: int = 0, model_path: str = "test_model", start_epoch: int = 0, patience: int = 20, ema_freq: int = 0, validation_dataloader: DataLoader = None) -> list[float]:
         """Training of the diffusion model.
 
         Args:
@@ -308,11 +313,14 @@ class Diffusion():
                     x = x.to(self.device).unsqueeze(1)
                 else:
                     x = x.to(self.device)
-                timesteps = self.get_sampling_timesteps(x.shape[0])
-                x_t, noise = self.noise_data(x, timesteps)
+                sigma_t = torch.rand(x.shape[0]).to(self.device)
+                x_sigma_t, e = self.noise_img_v_obj(x, sigma_t)
+
+                a, b = self.get_semicircle_weights(sigma_t)
+                true_vel = a * e - b * x_sigma_t
                 
                 with torch.autocast(device_type=self.device):
-                    pred_vel = self.model(x_t, timesteps)
+                    pred_vel = self.model(x_sigma_t, sigma_t)
                     loss = loss_function(pred_vel, true_vel) / gradient_accum
 
                 self.scaler.scale(loss).backward()
@@ -381,7 +389,7 @@ class Diffusion():
             total_time += epoch_time
             remaining_time = int((total_time / (e + 1)) * (epochs - e - 1))
 
-            logger.info(f"Epoch {e + 1 + start_epoch:03d}: Avg. Loss: {avg_loss:.5e}{f" Avg. val. Loss: {validation_loss:.5e}" if validation_dataloader is not None else ""} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e} ")
+            logger.info(f"Epoch {e + 1 + start_epoch:03d}: Avg. Loss: {avg_loss:.5e} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {optimizer.param_groups[0]['lr']:.5e} ")
             
             if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
                 checkpoint_path: str = f"{model_path[:-4]}_epoch_{e + 1:03d}.pth"
@@ -412,7 +420,8 @@ class Diffusion():
         """
         logger.info(f"Started sampling {n_samples} samples")
         self.model.eval()
-        self.ema.apply_shadow()
+        if self.ema is not None:
+            self.ema.apply_shadow()
 
         timesteps = self.T
 
@@ -447,7 +456,8 @@ class Diffusion():
         logger.info(f"Created {n_samples} samples")
 
         self.model.train()
-        self.ema.restore()
+        if self.ema is not None:
+            self.ema.restore()
         return x.cpu().numpy()
 
     def bwd_diffusion_ddim(self, n_samples: int = 8, sampling_timesteps: int = 50, eta: float = 0.0, visual_freq: int = 0) -> ndarray:
@@ -464,7 +474,8 @@ class Diffusion():
         """
         logger.info(f"Started sampling {n_samples} samples")
         self.model.eval()
-        self.ema.apply_shadow()
+        if self.ema is not None:
+            self.ema.apply_shadow()
         timesteps = self.T
         
         timesteps_ind = torch.linspace(0, timesteps - 1, steps=sampling_timesteps, dtype=torch.long, device=self.device)
@@ -500,7 +511,43 @@ class Diffusion():
         logger.info(f"Created {n_samples} samples")
 
         self.model.train()
-        self.ema.restore()
+        if self.ema is not None:
+            self.ema.restore()
+        return x.cpu().numpy()
+    
+    def bwd_diffusion_v_obj(self, n_samples: int = 8, sampling_timesteps: int = 50, visual_freq: int = 0) -> ndarray:
+        logger.info(f"Started sampling {n_samples} samples")
+        self.model.eval()
+        if self.ema is not None:
+            self.ema.apply_shadow()
+
+        x = torch.randn((n_samples, self.inp_dim[-3], self.inp_dim[-2], self.inp_dim[-1])).to(self.device)
+        t = torch.linspace(0, 1, sampling_timesteps + 1)
+        for i in reversed(range(sampling_timesteps)):
+            sigma_t = torch.full((n_samples,), t[sampling_timesteps - i], dtype=torch.float, device=self.device)
+            pred_vel = self.model(x, sigma_t)
+            a, b = self.get_semicircle_weights(sigma_t)
+            x_0 = a * x - b * pred_vel
+            e_t = b * x + a * pred_vel
+            sigma_t_1 = torch.full((n_samples,), t[sampling_timesteps - i - 1], dtype=torch.float, device=self.device)
+            a_1, b_1 = self.get_semicircle_weights(sigma_t_1)
+            x = a_1 * x_0 + b_1 * e_t
+            
+            if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {sampling_timesteps - i:04d}/{sampling_timesteps:04d} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} std/mean: {torch.std(x).item():.5f}, {torch.mean(x).item():.5f} ", end='', flush=True)
+            
+            if visual_freq > 0 and i % visual_freq == 0:
+                visualize_spectogram(normalize(x.cpu().numpy()[0, 0], -1, 1), conf["audio"].sample_rate, conf["audio"].len_fft)
+
+
+        if logger.getEffectiveLevel() == LIGHT_DEBUG:
+            print(flush=True)
+        logger.light_debug(f"Final X min/max before return: {torch.min(x).item():.5f}, {torch.max(x).item():.5f}")
+        logger.info(f"Created {n_samples} samples")
+
+        self.model.train()
+        if self.ema is not None:
+            self.ema.restore()
         return x.cpu().numpy()
     
     def visualize_diffusion_steps(self, x: Tensor, n_spectograms: int = 5) -> None:

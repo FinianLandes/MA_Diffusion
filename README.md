@@ -1,5 +1,7 @@
 # MA_DDPM
 
+**How can I use generative AI to create music based on DJ sets as training data?**
+
 ## Work Journal
 
 | Date       | Content              | Problems             |

@@ -3,6 +3,8 @@ import torch
 from torch import nn, Tensor
 from torch.utils.data import DataLoader, Dataset
 import torch.optim as optim
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.optim import Optimizer
 # Utils
 import numpy as np
 from numpy import ndarray
@@ -548,4 +550,139 @@ class Audio_Data(Dataset):
         return len(self.data)
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
+    
+class Trainer():
+    def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu")-> None:
+        self.model = model
+        self.optimizer = optimizer
+        self.lr_scheduler = lr_scheduler
+        self.device=device
+
+    def train(self, train_dataset: DataLoader, n_epochs: int, full_model_path: str, checkpoint_freq: int = 0, val_dataset: DataLoader = None, patience: int = -1) -> tuple[float, ...]:
+        logger.info(f"Training started on {self.device}")
+        if self.device == "cuda":
+            self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
+        else:
+            self.scaler = torch.amp.GradScaler(device=self.device)
+        loss_list: list = []
+        val_loss_list: list = []
+        total_time: float = 0.0
+        best_loss = float('inf')
+        epochs_no_improve: int = 0
+
+        self.model.train()
+        for e in range(0, n_epochs):
+            total_loss: float = 0
+            validation_loss: float = 0
+            start_time: float = time.time()
+
+            for b_idx, (x, _) in enumerate(train_dataset):
+                if x.dim() == 3:
+                    x = x.to(self.device).unsqueeze(1)
+                else:
+                    x = x.to(self.device)
+                with torch.autocast(device_type=self.device):
+                    loss = self.model(x)
+                self.optimizer.zero_grad()
+                loss.backward()
+                total_loss += loss.item()
+                self.optimizer.step()
+
+                if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                    current_batch = b_idx + 1
+                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {current_batch:03d}/{len(train_dataset):03d}", end='', flush=True)
+
+            if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(flush=True)
+
+            if val_dataset is not None:
+                self.model.eval()
+                for (x, _) in val_dataset:
+                    if x.dim() == 3:
+                        x = x.to(self.device).unsqueeze(1)
+                    else:
+                        x = x.to(self.device)
+                    
+                    with torch.no_grad():
+                        loss = self.model(x)
+                        validation_loss += loss.item()
+                validation_loss = validation_loss / len(val_dataset)
+                val_loss_list.append(validation_loss)
+                self.model.train()
+
+            avg_loss = total_loss / len(train_dataset)
+            loss_list.append(avg_loss)
+
+            if self.lr_scheduler is not None:
+                if isinstance(self.lr_scheduler, (optim.lr_scheduler.ReduceLROnPlateau)):
+                    self.lr_scheduler.step(avg_loss)
+                else:
+                    self.lr_scheduler.step()
+
+            if patience > 0:
+                if avg_loss < best_loss:
+                    epochs_no_improve = 0
+                    best_loss = avg_loss
+                else:
+                    epochs_no_improve += 1
+            
+            if epochs_no_improve >= patience and patience != -1:
+                logger.info(f"Early stopping at epoch {e + 1}: Loss has not improved for {patience} epochs")
+                break
+
+            epoch_time = time.time() - start_time
+            total_time += epoch_time
+            remaining_time = int((total_time / (e + 1)) * (n_epochs - e - 1))
+            val_loss_str = f" Avg. val. Loss: {validation_loss:.5e}" if val_dataset is not None else ""
+
+            logger.info(f"Epoch {e + 1:03d}: Avg. Loss: {avg_loss:.5e}{val_loss_str} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {self.optimizer.param_groups[0]['lr']:.5e} ")
+            
+            if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
+                checkpoint_path: str = f"{full_model_path[:-4]}_epoch_{e + 1:03d}.pth"
+                torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
+                if e + 1 != checkpoint_freq:
+                    last_path: str = f"{full_model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
+                    del_if_exists(last_path)
+                logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
+
+
+        torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, full_model_path)
+
+        logger.light_debug(f"Saved model to {full_model_path}")
+
+        if checkpoint_freq > 0:
+            checkpoint_path: str = f"{full_model_path[:-4]}_epoch_{e + 1 - ((e + 1) % checkpoint_freq):03d}.pth"
+            del_if_exists(checkpoint_path)
+        
+        return loss_list, val_loss_list
+    
+    def save_architecture(self, tensor_dim: list, path: str) -> None:
+        self.model.eval()
+        with torch.no_grad():
+            example_x = torch.randn(*tensor_dim).to(self.device)
+            script_model = torch.jit.trace(self.model,example_x, check_trace=False)
+        torch.jit.save(script_model, path)
+        self.model.train()
+    
+    def sample(self, n_samples: int, tensor_dim: list, n_steps: int = 1000, visualize: bool = False) -> ndarray:
+        noise = torch.randn(n_samples, tensor_dim[-3], tensor_dim[-2], tensor_dim[-1]).to(self.device)
+        self.model.eval()
+        samples = self.model.sample(noise, num_steps=1000).cpu().numpy()
+        samples = normalize(samples, -1, 1)
+        self.model.train()
+        if visualize:
+            self.visualize_samples(samples)
+        return samples
+    
+    def visualize_samples(self, samples: ndarray) -> None:
+        for i in range(samples.shape[0]):
+            sample = samples[i, 0]
+            plt.imshow(normalize(sample, -1, 1), cmap = "PuRd", origin="lower")
+            plt.show()
+    
+    def save_samples(self, samples: ndarray, file_path_name: str, sr: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
+        for i in range(samples.shape[0]):
+            sample = samples[i, 0]
+            audio = spectrogram_to_audio(unnormalize(sample), len_fft, len_hop)
+            save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sample_rate=sr)
 

@@ -13,17 +13,17 @@ from .Utils import *
 logger = logging.getLogger(__name__)
 
 class ResBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, factor: int = 1, activation: nn.Module = nn.GELU()) -> None:
+    def __init__(self, in_channels: int, out_channels: int, factor: int = 1, activation: nn.Module = nn.GELU(), width_down_sampling: int = 2) -> None:
         super(ResBlock, self).__init__()
+        width_down_sampling = width_down_sampling if factor > 1 else 1
         self.activation = activation
         self.in_conv = nn.Conv2d(in_channels, out_channels, 3, 1, 1)
         self.layers = nn.Sequential(
             nn.InstanceNorm2d(out_channels),
             activation,
             nn.Conv2d(out_channels, out_channels, 3, 1, 1),
-            nn.InstanceNorm2d(out_channels)
         )
-        self.downsample = nn.MaxPool2d(kernel_size=factor) if factor > 1 else nn.Identity()
+        self.downsample = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=factor, padding=1) if factor > 1 else nn.Identity()
         
     def forward(self, x: Tensor) -> Tensor:
         x = self.in_conv(x)
@@ -31,18 +31,32 @@ class ResBlock(nn.Module):
         x = self.layers(x)
         x = self.activation(x + identity)
         return self.downsample(x)
+class Simple_Embed(nn.Module):
+    def __init__(self,  channels: int, embed_dim: int = 128) -> None:
+        super(Simple_Embed, self).__init__()
+        self.embed_layer = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(
+                embed_dim,
+                channels
+            ),
+        )
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        embed = self.embed_layer(t)[:, :, None, None].repeat(1, 1, x.shape[-2], x.shape[-1])
+        x += embed
+        return x
 
 class Modulation(nn.Module):
     def __init__(self, channels: int, embed_dim: int = 128) -> None:
         super(Modulation, self).__init__()
         self.channels = channels
-        self.norm = nn.InstanceNorm2d(channels)
+        self.norm = nn.InstanceNorm2d(channels, eps=1e-06)
         self.weight = nn.Linear(embed_dim, channels)
         self.bias = nn.Linear(embed_dim, channels)
 
     def forward(self, x: Tensor, emb: Tensor) -> Tensor:
         x = self.norm(x)
-        w: Tensor = self.weight(emb)
+        w: Tensor = self.weight(emb) + 1
         b: Tensor = self.bias(emb)
         x = x * w.view(-1, self.channels, 1, 1) + b.view(-1, self.channels, 1, 1)
         return x
@@ -62,7 +76,6 @@ class Attention(nn.Module):
     
     def forward(self, x: Tensor) -> Tensor:
         b,c,h,w = x.shape
-        x = self.norm(x)
         qkv: Tensor = self.to_qvk(x)
         qkv = qkv.view(b, 3, self.num_heads, self.head_features, h * w)
         q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
@@ -74,7 +87,7 @@ class Attention(nn.Module):
         out = out.view(b, self.num_heads * self.head_features, h, w)
         out = self.out_proj(out)
         x = x + out
-        return x
+        return self.norm(x)
 
 class FeedForward(nn.Module):
     def __init__(self, channels: int, expansion_factor: int = 4, activation: nn.Module = nn.GELU()) -> None:
@@ -82,7 +95,6 @@ class FeedForward(nn.Module):
         self.channels = channels
 
         self.ffn = nn.Sequential(
-            nn.InstanceNorm2d(channels),
             nn.Conv2d(channels, channels * expansion_factor, kernel_size=1),
             activation, 
             nn.Conv2d(channels * expansion_factor, channels, kernel_size=1)
@@ -106,31 +118,45 @@ class Injection(nn.Module):
         return self.layers(x)
 
 class Block(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, factor: int, n_res_blocks: int, attention: bool, attn_heads: int, attn_features: int, activation: nn.Module, embed_dim: int, up: bool = False) -> None:
+    def __init__(self, in_channels: int, out_channels: int, factor: int, n_res_blocks: int, attention: bool, attn_heads: int, attn_features: int, activation: nn.Module, embed_dim: int, up: bool = False, width_upsample: int = 2, embed_class: nn.Module = Modulation) -> None:
         super(Block, self).__init__()
-        self.upsample = nn.Sequential(ResBlock(in_channels, in_channels, 1, activation), nn.Upsample(scale_factor=factor)) if up else nn.Identity()
-        self.injection = Injection(in_channels, in_channels, in_channels, activation) if up else nn.Identity()
-        self.init_res = ResBlock(in_channels, out_channels, 1, activation)
-        self.attention_layers = nn.ModuleList([Modulation(out_channels, embed_dim), Attention(out_channels, attn_heads, attn_features) if attention else nn.Identity(), FeedForward(out_channels, 4) if attention else nn.Identity()])
-        self.res_blocks = nn.ModuleList([ResBlock(out_channels, out_channels, 1, activation) for _ in range(n_res_blocks)])
+        if n_res_blocks == 0:
+            n_res_blocks = 1
+        width_upsample = width_upsample if factor > 1 else 1
+        self.init_res = ResBlock(in_channels, in_channels if up else out_channels, 1, activation)
+        self.upsample = nn.Sequential(ResBlock(in_channels, in_channels, 1, activation), 
+                                    nn.ConvTranspose2d(in_channels, in_channels, kernel_size=4, stride=factor, padding=1)) if up else nn.Identity()
+        self.injection = Injection(in_channels, in_channels, out_channels, activation) if up else nn.Identity()
+        self.attention_layers = nn.ModuleList([
+                                            embed_class(out_channels, embed_dim), 
+                                            Attention(out_channels, attn_heads, attn_features) if attention else nn.Identity(), 
+                                            FeedForward(out_channels, 4) if attention else nn.Identity()])
+        self.res_blocks = nn.ModuleList([ResBlock(out_channels, out_channels, 1, activation) for _ in range(n_res_blocks - 1)])
         self.downsample = ResBlock(out_channels, out_channels, factor, activation) if not up else nn.Identity()
             
 
     def forward(self, x: Tensor, t: Tensor, skip: Tensor = None) -> Tensor:
+        logger.debug(f"Block fwd start Size: {x.shape}")
         x = self.upsample(x)
+        logger.debug(f"After upsample Size: {x.shape}")
         x = self.init_res(x)
+        logger.debug(f"After Init res Size: {x.shape}")
         if skip is not None:
-            skip = self.upsample(skip)
+            skip = self.upsample[1](skip)
+            logger.debug(f"After skip Size: {x.shape}")
             x = self.injection(x, skip)
+            logger.debug(f"After inj. Size: {x.shape}")
         
         for layer in self.res_blocks:
             x = layer(x)
+            logger.debug(x.shape, type(layer))
 
         for layer in self.attention_layers:
-            if isinstance(layer, Modulation):
+            if isinstance(layer, (Modulation, Simple_Embed)):
                 x = layer(x, t)
             else:
                 x = layer(x)
+            logger.debug(x.shape, type(layer))
         
         return self.downsample(x)
 
@@ -138,18 +164,18 @@ class Block(nn.Module):
 
 
 class U_NET(nn.Module):
-    def __init__(self, in_channels: int = 1, channels: list[int] = [256, 256, 512, 512, 1024, 1024], res_blocks: list[int] = [1, 2, 2, 2, 2, 2], factors: list[int] = [2, 2, 2, 2, 4, 4], attentions: list[int] = [0, 0, 0, 0, 0, 1], attention_heads: int = 12, attention_features: int = 64, activation: nn.Module = nn.GELU(), embeding_dim: int = 128, device: str = "cpu") -> None:
+    def __init__(self, in_channels: int = 1, channels: list[int] = [256, 256, 512, 512, 1024, 1024], res_blocks: list[int] = [1, 2, 2, 2, 2, 2], factors: list[int] = [2, 2, 2, 2, 4, 4], attentions: list[int] = [0, 0, 0, 0, 0, 1], attention_heads: int = 12, attention_features: int = 64, activation: nn.Module = nn.GELU(), embeding_dim: int = 128, embed_class: nn.Module = Modulation, device: str = "cpu") -> None:
         super(U_NET, self).__init__()
         self.device = device
         self.time_embed_dim = embeding_dim
         channels.insert(0, in_channels)
-        self.encoder = nn.ModuleList([Block(channels[i], channels[i + 1], factors[i], res_blocks[i], attentions[i], attention_heads, attention_features, activation, embeding_dim) for i in range(len(res_blocks))])
+        self.encoder = nn.ModuleList([Block(channels[i], channels[i + 1], factors[i], res_blocks[i], attentions[i], attention_heads, attention_features, activation, embeding_dim, embed_class=embed_class) for i in range(len(res_blocks))])
         channels.reverse()
         res_blocks.reverse()
         factors.reverse()
         attentions.reverse()
         self.bottleneck = nn.Sequential(ResBlock(channels[0], channels[0], 1, activation), ResBlock(channels[0], channels[0], 1, activation))
-        self.decoder = nn.ModuleList([Block(channels[i], channels[i + 1], factors[i], res_blocks[i], attentions[i], attention_heads, attention_features, activation, embeding_dim, True) for i in range(len(res_blocks))])
+        self.decoder = nn.ModuleList([Block(channels[i], channels[i + 1], factors[i], res_blocks[i], attentions[i], attention_heads, attention_features, activation, embeding_dim, True,embed_class=embed_class) for i in range(len(res_blocks))])
     
     def time_embed(self, t: Tensor, channels: int) -> Tensor:
         inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2, device=self.device).float() / channels))
