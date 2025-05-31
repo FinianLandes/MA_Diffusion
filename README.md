@@ -20,8 +20,10 @@
 | >24.03.2025 | Added extra  Skip connection. Matching the implementation of Luke Ditra. This is now giving me some results again, seemingly training is not completely stable as after some epochs all highs seem to get removed but with low epoch counts the outputs are very noisy  | |
 | >23.04.2025 | Added more blocks and structures to the unet file, also created a new unet more based on the one proposed by Flavio schneider, but having size and memory issues there. ||
 | >28.04.2025 | Training on the cifar10 dataset now to test the architecture and also to compare the results to the unetV0 by Flavio schneider for Archisound. | |
+| >30.05.2025 | Implemented the Trainer class in untils which simplifies training of the eth diffusion. Also added gradient clipping to prevent numerical instability, helped partially still not stable but way better. ||
 
 ## General Info
+
 ### Directory Details
 
 - **Data**
@@ -96,4 +98,3 @@ The dataset is created in the preprocessing file. The Model is trained on 4s mon
 - [Explanation by ExplainingAI](https://www.youtube.com/watch?v=H45lF4sUgiE)
 - [Implemtation by ExplainingAI](https://www.youtube.com/watch?v=vu6eKteJWew)
 - [Explanation UNET by rupert ai](https://www.youtube.com/watch?v=NhdzGfB1q74)
-

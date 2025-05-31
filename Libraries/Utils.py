@@ -11,6 +11,7 @@ from numpy import ndarray
 import matplotlib.pyplot as plt
 import librosa, os, logging, time, soundfile
 from scipy.signal import butter, lfilter
+from typing import Callable
 #Logging
 LIGHT_DEBUG: int = 15
 
@@ -522,7 +523,7 @@ def visualize_spectogram(spectogram: ndarray, sample_rate: int = 44100, len_fft:
 
 
 # Torch utils
-def count_parameters(model: nn.Module) -> int:
+def count_parameters(model: nn.Module) -> str:
     """Counts all parameters of NN module. 
 
     Args:
@@ -530,8 +531,13 @@ def count_parameters(model: nn.Module) -> int:
     Returns:
         int: Number of parameters.
     """
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
+    suffixes: dict = {1e9:"B", 1e6:"M", 1e3:"k", 1e0:""}
+    n =  sum(p.numel() for p in model.parameters() if p.requires_grad)
+    for key, val in suffixes.items():
+        if n / key > 1:
+            n_f = 3 - len(str(np.floor(n / key)))
+            n = round(n / key, n_f)
+            return f"~{n}{val}"
 class Audio_Data(Dataset):
     def __init__(self, data: ndarray, labels: ndarray = None, dtype: torch.dtype = torch.float32) -> None:
         """Creates a torch dataloader. 
@@ -552,13 +558,15 @@ class Audio_Data(Dataset):
         return self.data[idx], self.labels[idx]
     
 class Trainer():
-    def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu")-> None:
+    def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu", embed_fun: Callable | None = None, embed_dim: int | None = None)-> None:
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-        self.device=device
+        self.device = device
+        self.embed_fun = embed_fun
+        self.embed_dim = embed_dim
 
-    def train(self, train_dataset: DataLoader, n_epochs: int, full_model_path: str, checkpoint_freq: int = 0, val_dataset: DataLoader = None, patience: int = -1) -> tuple[float, ...]:
+    def train(self, train_dataset: DataLoader, n_epochs: int, full_model_path: str, checkpoint_freq: int = 0, val_dataset: DataLoader = None, patience: int = -1, gradient_clip_norm: float| None = None, gradient_clip_val: float | None = None, use_embed: bool = False, sample_freq: int | None = None) -> tuple[list[float], list[float]]:
         logger.info(f"Training started on {self.device}")
         if self.device == "cuda":
             self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
@@ -576,74 +584,96 @@ class Trainer():
             validation_loss: float = 0
             start_time: float = time.time()
 
-            for b_idx, (x, _) in enumerate(train_dataset):
+            for b_idx, (x, y) in enumerate(train_dataset):
                 if x.dim() == 3:
                     x = x.to(self.device).unsqueeze(1)
                 else:
                     x = x.to(self.device)
                 with torch.autocast(device_type=self.device):
-                    loss = self.model(x)
+                    if use_embed:
+                        loss = self.model(x, embedding=self.embed_fun(y, self.embed_dim).to(self.device))
+                    else:
+                        loss = self.model(x)
+
                 self.optimizer.zero_grad()
                 loss.backward()
                 total_loss += loss.item()
+                if np.isnan(loss.item()):
+                    break
+                if gradient_clip_norm is not None:
+                    nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_norm)
+                if gradient_clip_val is not None:
+                    nn.utils.clip_grad_value_(self.model.parameters(), gradient_clip_val)
+                
                 self.optimizer.step()
 
                 if logger.getEffectiveLevel() == LIGHT_DEBUG:
                     current_batch = b_idx + 1
-                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {current_batch:03d}/{len(train_dataset):03d}", end='', flush=True)
+                    all_params = torch.cat([param.view(-1) for param in self.model.parameters()])
+                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {current_batch:03d}/{len(train_dataset):03d} Min/Max loss: {torch.min(loss):.3f}, {torch.max(loss):.3f} Min/Max params: {torch.min(all_params):.3f}, {torch.max(all_params):.3f}", end='', flush=True)
+            else:
+                if logger.getEffectiveLevel() == LIGHT_DEBUG:
+                    print(flush=True)
 
-            if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                print(flush=True)
+                if val_dataset is not None:
+                    self.model.eval()
+                    for (x, y) in val_dataset:
+                        if x.dim() == 3:
+                            x = x.to(self.device).unsqueeze(1)
+                        else:
+                            x = x.to(self.device)
+                        if use_embed:
+                            loss = self.model(x, embedding=self.embed_fun(y, self.embed_dim).to(self.device))
+                        else:
+                            loss = self.model(x)
+                        
+                        with torch.no_grad():
+                            loss = self.model(x)
+                            validation_loss += loss.item()
+                    validation_loss = validation_loss / len(val_dataset)
+                    val_loss_list.append(validation_loss)
+                    self.model.train()
 
-            if val_dataset is not None:
-                self.model.eval()
-                for (x, _) in val_dataset:
-                    if x.dim() == 3:
-                        x = x.to(self.device).unsqueeze(1)
+                avg_loss = total_loss / len(train_dataset)
+                loss_list.append(avg_loss)
+
+                if self.lr_scheduler is not None:
+                    if isinstance(self.lr_scheduler, (optim.lr_scheduler.ReduceLROnPlateau)):
+                        self.lr_scheduler.step(avg_loss)
                     else:
-                        x = x.to(self.device)
-                    
-                    with torch.no_grad():
-                        loss = self.model(x)
-                        validation_loss += loss.item()
-                validation_loss = validation_loss / len(val_dataset)
-                val_loss_list.append(validation_loss)
-                self.model.train()
+                        self.lr_scheduler.step()
 
-            avg_loss = total_loss / len(train_dataset)
-            loss_list.append(avg_loss)
+                if patience > 0:
+                    if avg_loss < best_loss:
+                        epochs_no_improve = 0
+                        best_loss = avg_loss
+                    else:
+                        epochs_no_improve += 1
+                
+                if epochs_no_improve >= patience and patience != -1:
+                    logger.info(f"Early stopping at epoch {e + 1}: Loss has not improved for {patience} epochs")
+                    break
+                
+                if sample_freq is not None and e % sample_freq == 0:
+                    x, _ = next(iter(train_dataset))
+                    h, w = x.shape[-2], x.shape[-1]
+                    self.sample(2, [2, 1, h, w], 250, True)
+                epoch_time = time.time() - start_time
+                total_time += epoch_time
+                remaining_time = int((total_time / (e + 1)) * (n_epochs - e - 1))
+                val_loss_str = f" Avg. val. Loss: {validation_loss:.5e}" if val_dataset is not None else ""
 
-            if self.lr_scheduler is not None:
-                if isinstance(self.lr_scheduler, (optim.lr_scheduler.ReduceLROnPlateau)):
-                    self.lr_scheduler.step(avg_loss)
-                else:
-                    self.lr_scheduler.step()
-
-            if patience > 0:
-                if avg_loss < best_loss:
-                    epochs_no_improve = 0
-                    best_loss = avg_loss
-                else:
-                    epochs_no_improve += 1
-            
-            if epochs_no_improve >= patience and patience != -1:
-                logger.info(f"Early stopping at epoch {e + 1}: Loss has not improved for {patience} epochs")
-                break
-
-            epoch_time = time.time() - start_time
-            total_time += epoch_time
-            remaining_time = int((total_time / (e + 1)) * (n_epochs - e - 1))
-            val_loss_str = f" Avg. val. Loss: {validation_loss:.5e}" if val_dataset is not None else ""
-
-            logger.info(f"Epoch {e + 1:03d}: Avg. Loss: {avg_loss:.5e}{val_loss_str} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {self.optimizer.param_groups[0]['lr']:.5e} ")
-            
-            if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
-                checkpoint_path: str = f"{full_model_path[:-4]}_epoch_{e + 1:03d}.pth"
-                torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
-                if e + 1 != checkpoint_freq:
-                    last_path: str = f"{full_model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
-                    del_if_exists(last_path)
-                logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
+                logger.info(f"Epoch {e + 1:03d}: Avg. Loss: {avg_loss:.5e}{val_loss_str} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {self.optimizer.param_groups[0]['lr']:.5e} ")
+                
+                if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
+                    checkpoint_path: str = f"{full_model_path[:-4]}_epoch_{e + 1:03d}.pth"
+                    torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
+                    if e + 1 != checkpoint_freq:
+                        last_path: str = f"{full_model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
+                        del_if_exists(last_path)
+                    logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
+                continue
+            break
 
 
         torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, full_model_path)
@@ -680,9 +710,37 @@ class Trainer():
             plt.imshow(normalize(sample, -1, 1), cmap = "PuRd", origin="lower")
             plt.show()
     
-    def save_samples(self, samples: ndarray, file_path_name: str, sr: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
+    def save_samples(self, samples: ndarray, file_path_name: str, sample_rate: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
         for i in range(samples.shape[0]):
             sample = samples[i, 0]
             audio = spectrogram_to_audio(unnormalize(sample), len_fft, len_hop)
-            save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sample_rate=sr)
+            save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sample_rate=sample_rate)
+    
+    def get_audio_metrics(self, samples: ndarray, original_dataset: ndarray = None, sample_rate: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
+        avg_sample_spectral_conv: float = 0
+        avg_sample_spectral_cent: float = 0
+        avg_true_spectral_conv: float = 0
+        avg_true_spectral_cent: float = 0
+        for i in range(samples.shape[0]):
+            sample = samples[i, 0]
+            avg_sample_spectral_conv += spectral_convergence(sample, sample_rate=sample_rate, len_fft=len_fft, hop_length=len_hop)
+            avg_sample_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sample_rate))
+
+        if original_dataset is not None:
+            indices: list = np.random.choice(len(original_dataset), 100)
+            for idx in indices:
+                sample = original_dataset[idx]
+                avg_true_spectral_conv += spectral_convergence(sample, sample_rate=sample_rate, len_fft=len_fft, hop_length=len_hop)
+                avg_true_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sample_rate))
+
+        n = len(samples)
+        avg_sample_spectral_conv = avg_sample_spectral_conv / n
+        avg_sample_spectral_cent = avg_sample_spectral_cent / n
+        avg_true_spectral_conv = avg_true_spectral_conv / 100
+        avg_true_spectral_cent = avg_true_spectral_cent / 100
+        metrics_str: str = f"Spectral Convergence Samples/Real: {avg_sample_spectral_conv:.3f}, {avg_true_spectral_conv:.3f} Spectral Centroid Samples/Real: {avg_sample_spectral_cent:.3f} Hz, {avg_true_spectral_cent:.3f} Hz" if original_dataset is not None else f"Spectral Convergence Samples: {avg_sample_spectral_conv:.3f} Spectral Centroid Samples: {avg_sample_spectral_cent:.3f} Hz"
+        print(metrics_str)
+        
+
+
 
