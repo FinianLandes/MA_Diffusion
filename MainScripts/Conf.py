@@ -13,7 +13,7 @@ class Audio:
     sample_rate: int = 32000
     len_fft: int = 480
     len_hop: int = 288 
-    time_frame_s: int = 4
+    time_frame_s: float = 4.6
     overlap:int = 1
 
 class Models:

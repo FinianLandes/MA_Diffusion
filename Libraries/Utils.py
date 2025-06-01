@@ -149,20 +149,20 @@ def del_if_exists(path: str) -> None:
         logger.light_debug(f"{path} could not be deleted")
 
 # Other Manipulations
-def split_audiofile(audio: ndarray, time: int, sample_rate: int = 44100, overlap_s: int = 0) -> ndarray:
+def split_audiofile(audio: ndarray, time: float, sample_rate: int = 44100, overlap_s: float = 0) -> ndarray:
     """Splits audio into samples of length time, with an optional overlap. Pads the last file with zeroes if necessary.
 
     Args:
         audio (ndarray): Audiofile.
-        time (int): Sample length in s.
+        time (float): Sample length in s.
         sample_rate (int, optional): Sample rate. Defaults to 44100.
-        overlap_s (int, optional): Overlap of the samples in s. Defaults to 0.
+        overlap_s (float, optional): Overlap of the samples in s. Defaults to 0.
 
     Returns:
         ndarray: Nd-array containing the audiosplits.
     """
-    samples: int = sample_rate * time
-    samples_overlap: int = sample_rate * overlap_s
+    samples: int = int(sample_rate * time)
+    samples_overlap: int = int(sample_rate * overlap_s)
     if overlap_s == 0:
         pad: int = len(audio) % samples
         audio = np.pad(audio, (0, samples - pad))
@@ -557,13 +557,14 @@ class Audio_Data(Dataset):
         return self.data[idx], self.labels[idx]
     
 class Trainer():
-    def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu", embed_fun: Callable | None = None, embed_dim: int | None = None)-> None:
+    def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu", embed_fun: Callable | None = None, embed_dim: int | None = None, n_dims: int = 1)-> None:
         self.model = model
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
         self.device = device
         self.embed_fun = embed_fun
         self.embed_dim = embed_dim
+        self.n_dims = n_dims
 
     def train(self, train_dataset: DataLoader, n_epochs: int, full_model_path: str, checkpoint_freq: int = 0, val_dataset: DataLoader = None, patience: int = -1, gradient_clip_norm: float| None = None, gradient_clip_val: float | None = None, use_embed: bool = False, sample_freq: int | None = None) -> tuple[list[float], list[float]]:
         logger.info(f"Training started on {self.device}")
@@ -585,7 +586,7 @@ class Trainer():
 
             for b_idx, (x, y) in enumerate(train_dataset):
                 self.optimizer.zero_grad()
-                if x.dim() == 3:
+                if x.dim() == self.n_dims + 1:
                     x = x.to(self.device).unsqueeze(1)
                 else:
                     x = x.to(self.device)
@@ -620,17 +621,15 @@ class Trainer():
                 if val_dataset is not None:
                     self.model.eval()
                     for (x, y) in val_dataset:
-                        if x.dim() == 3:
+                        if x.dim() == self.n_dims + 1:
                             x = x.to(self.device).unsqueeze(1)
                         else:
                             x = x.to(self.device)
-                        if use_embed:
-                            loss = self.model(x, embedding=self.embed_fun(y, self.embed_dim).to(self.device))
-                        else:
-                            loss = self.model(x)
-                        
                         with torch.no_grad():
-                            loss = self.model(x)
+                            if use_embed:
+                                loss = self.model(x, embedding=self.embed_fun(y, self.embed_dim).to(self.device))
+                            else:
+                                loss = self.model(x)
                             validation_loss += loss.item()
                     validation_loss = validation_loss / len(val_dataset)
                     val_loss_list.append(validation_loss)
@@ -658,8 +657,11 @@ class Trainer():
                 
                 if sample_freq is not None and (e + 1) % sample_freq == 0:
                     x, _ = next(iter(train_dataset))
-                    h, w = x.shape[-2], x.shape[-1]
-                    self.sample(2, [2, 1, h, w], 10, True)
+                    c, h, w = x.shape[-3], x.shape[-2], x.shape[-1]
+                    if self.n_dims == 2:
+                        self.sample(2, [2, c, h, w], 10, True)
+                    else:
+                        self.sample(2,[2, h, w], 10, True)
                 epoch_time = time.time() - start_time
                 total_time += epoch_time
                 remaining_time = int((total_time / (e + 1)) * (n_epochs - e - 1))
@@ -688,6 +690,11 @@ class Trainer():
         
         return loss_list, val_loss_list
     
+    def _convert_to_item_list(self, x: Tensor) -> ndarray:
+        if x.ndim == 4:
+            x = torch.squeeze(x, 1)
+        return x.cpu().numpy()
+    
     def save_architecture(self, tensor_dim: list, path: str) -> None:
         self.model.eval()
         with torch.no_grad():
@@ -697,9 +704,12 @@ class Trainer():
         self.model.train()
     
     def sample(self, n_samples: int, tensor_dim: list, n_steps: int = 20, visualize: bool = False) -> ndarray:
-        noise = torch.randn(n_samples, tensor_dim[-3], tensor_dim[-2], tensor_dim[-1]).to(self.device)
+        if self.n_dims == 2:
+            noise = torch.randn(n_samples, tensor_dim[-3], tensor_dim[-2], tensor_dim[-1]).to(self.device)
+        else:
+            noise = torch.randn(n_samples, tensor_dim[-2], tensor_dim[-1]).to(self.device)
         self.model.eval()
-        samples = self.model.sample(noise, num_steps=n_steps).cpu().numpy()
+        samples = self._convert_to_item_list(self.model.sample(noise, num_steps=n_steps))
         samples = normalize(samples, -1, 1)
         self.model.train()
         if visualize:
@@ -707,14 +717,12 @@ class Trainer():
         return samples
     
     def visualize_samples(self, samples: ndarray) -> None:
-        for i in range(samples.shape[0]):
-            sample = samples[i, 0]
+        for sample in samples:
             plt.imshow(normalize(sample, -1, 1), cmap = "PuRd", origin="lower")
             plt.show()
     
     def save_samples(self, samples: ndarray, file_path_name: str, sample_rate: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
-        for i in range(samples.shape[0]):
-            sample = samples[i, 0]
+        for i, sample in enumerate(samples):
             audio = spectrogram_to_audio(unnormalize(sample), len_fft, len_hop)
             save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sample_rate=sample_rate)
     
@@ -723,8 +731,7 @@ class Trainer():
         avg_sample_spectral_cent: float = 0
         avg_true_spectral_conv: float = 0
         avg_true_spectral_cent: float = 0
-        for i in range(samples.shape[0]):
-            sample = samples[i, 0]
+        for sample in samples:
             avg_sample_spectral_conv += spectral_convergence(sample, sample_rate=sample_rate, len_fft=len_fft, hop_length=len_hop)
             avg_sample_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sample_rate))
 
