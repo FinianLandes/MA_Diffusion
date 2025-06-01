@@ -209,7 +209,7 @@ def audio_to_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 
     stft = librosa.stft(audio, n_fft=len_fft, hop_length=hop_length)
     spec = np.abs(stft)
     if log:
-        spec = librosa.amplitude_to_db(spec)
+        spec = np.log(spec + 1e-6)
     logger.light_debug(f"Created spectogram: {spec.shape}")
     return spec
 
@@ -231,7 +231,7 @@ def audio_splits_to_spectograms(audio: ndarray, len_fft: int = 4096, hop_length:
         stft = librosa.stft(split, n_fft=len_fft, hop_length=hop_length)
         spec = np.abs(stft)
         if log:
-            spec = librosa.amplitude_to_db(spec)
+            spec = np.log(spec + 1e-6)
         specs.append(spec)
         if (i + 1) % 10 == 0 and logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Processed Splits: {i + 1}", end='')
@@ -257,7 +257,7 @@ def spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 5
     if spec.shape[0] != len_fft // 2 + 1:
         spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
     if log:
-        spec = librosa.db_to_amplitude(spec)
+        spec = np.exp(spec)
     audio: ndarray = librosa.griffinlim(spec, n_fft=len_fft, hop_length=hop_length)
     audio = normalize(audio, -0.99999, 0.99999)
     logger.light_debug(f"Reconstructed audio: {audio.shape}")
@@ -353,7 +353,7 @@ def audio_to_mel_spectogram(audio: ndarray, len_fft: int = 4096, hop_length: int
     logger.light_debug("Started Mel-Spec")
     spec = librosa.feature.melspectrogram(y=audio, n_fft=len_fft, hop_length=hop_length, sr=sample_rate, fmin=min_freq, n_mels=n_mels)
     if log:
-        spec = librosa.amplitude_to_db(spec)
+        spec = np.log(spec + 1e-6)
     logger.light_debug(f"Created mel-spectogram: {spec.shape}")
     return spec
 
@@ -377,14 +377,14 @@ def audio_splits_to_mel_spectograms(audio: ndarray, len_fft: int = 4096, hop_len
     for i,split in enumerate(audio):
         spec = librosa.feature.melspectrogram(y=split, n_fft=len_fft, hop_length=hop_length, sr=sample_rate, fmin=min_freq, n_mels=n_mels)
         if log:
-            spec = librosa.amplitude_to_db(spec)
+            spec = np.log(spec + 1e-6)
         specs.append(spec)
         if (i + 1) % 10 == 0 and logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Processed Splits: {i + 1}", end='')
     if logger.getEffectiveLevel() == LIGHT_DEBUG:
         print()
     specs: ndarray = np.array(specs)
-    logger.light_debug(f"Created me-spectograms of splits: {specs.shape}")
+    logger.light_debug(f"Created Mel-spectograms of splits: {specs.shape}")
     return specs
 
 def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True) -> ndarray:
@@ -404,7 +404,7 @@ def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int
     if spec.shape[0] != len_fft // 2 + 1:
         spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
     if log:
-        spec = librosa.db_to_amplitude(spec)
+        spec = np.exp(spec)
     audio: ndarray = librosa.feature.inverse.mel_to_audio(spec, sr=sample_rate, n_fft=len_fft, hop_length=hop_length)
     audio = normalize(audio, -0.99999, 0.99999)
     logger.light_debug(f"Reconstructed audio: {audio.shape}")
@@ -715,6 +715,15 @@ class Trainer():
         if visualize:
             self.visualize_samples(samples)
         return samples
+    
+    def sample_voc(self, spec: ndarray, n_steps: int = 20) -> ndarray:
+        if spec.ndim == 2:
+            spec = np.reshape(spec, [1, 1, spec.shape[-2], spec.shape[-1]])
+        if spec.ndim == 3:
+            spec = np.reshape(spec, [spec.shape[0], 1, spec.shape[-2], spec.shape[-1]])
+        spec = torch.tensor(spec)
+        wave = self.model.sample(spec, num_steps=n_steps)
+        return wave.cpu().numpy()
     
     def visualize_samples(self, samples: ndarray) -> None:
         for sample in samples:
