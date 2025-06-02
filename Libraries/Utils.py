@@ -725,6 +725,16 @@ class Trainer():
         wave = self.model.sample(spec, num_steps=n_steps)
         return wave.cpu().numpy()
     
+    def sample_AE(self, seed: ndarray, n_steps: int = 20) -> ndarray:
+        if seed.ndim == 2:
+            seed = np.reshape(seed, [seed.shape[0], 1, seed.shape[1]])
+        elif seed.ndim == 1:
+            seed = np.reshape(seed, [1, 1, seed.shape[0]])
+        seed = torch.tensor(seed).to(self.device)
+        latent = self.model.encode(seed)
+        sample = self.model.decode(latent, num_steps=n_steps).cpu().numpy()
+        return sample
+
     def visualize_samples(self, samples: ndarray) -> None:
         for sample in samples:
             plt.imshow(normalize(sample, -1, 1), cmap = "PuRd", origin="lower")

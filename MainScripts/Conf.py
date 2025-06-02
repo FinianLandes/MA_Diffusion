@@ -11,22 +11,12 @@ class Paths:
 class Audio:
     """Settings for audio processing and spectograms."""
     sample_rate: int = 32000
-    len_fft: int = 480
-    len_hop: int = 288 
     time_frame_s: float = 4.6
     overlap:int = 1
 
-class Models:
-    """Hyperparameters and architecture for u-net and diffusion."""
-    n_starting_filters: int = 48
-    n_downsamples: int = 3
-    time_embed_dim: int = 128
-    diffusion_timesteps: int = 1000
-    batch_size: int = 4
-    gradient_accum: int = 2
+
 
 conf = {
     "paths": Paths(),
-    "audio": Audio(),
-    "model": Models()
+    "audio": Audio()
 }

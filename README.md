@@ -22,6 +22,7 @@
 | >28.04.2025 | Training on the cifar10 dataset now to test the architecture and also to compare the results to the unetV0 by Flavio schneider for Archisound. | |
 | >30.05.2025 | Implemented the Trainer class in untils which simplifies training of the eth diffusion. Also added gradient clipping to prevent numerical instability, helped partially still not stable but way better. ||
 | >01.06.2025 | Trying to get closer to the implemntation by Archisound/Mousai. Switched to Mel spectograms, less bins more info, also switched to a 1D net where the frequency bins are used as channels speeding up computations significantly. Also strated with the vocoder implementation needed to convert a mel spectogram back to a waveform. ||
+| >02.06.2025 | Getting wy better results with the standard diffusion process, loss of 9.4e-2. Butt missing a lot of temporal features such as longer notes. Also due to the change to mel spectograms. A Vocoder would be needed to obtain a audio sample of the spectograms. Therefore i switched to the Diffusion autoencoder as proposed in the Mousai paper. This takes way longer to train. 10mins per epcoh with 1000 samples. but in theory should yield better results and also acts as a vocoder so no second model is needed. Besides that there is some unclarity in the setup of the encoder as that is not mentioned in a paper so i'm just guessing which params go there. | |
 
 ## General Info
 
@@ -32,14 +33,21 @@
   - `music_file.wav` - Example audio file for processing.
 
 - **Libraries**
+  - `Utils.py` - General utility functions and the Trainer class for the newer models.
+
+  The following are not used in the newer models anymore:
+  - `U_Net.py` - U-Net architecture definition.
   - `VAE.py` - Variational Autoencoder implementation.
   - `Diffusion.py` - Diffusion model implementation.
-  - `Utils.py` - General utility functions.
-  - `U_Net.py` - U-Net architecture definition.
 
 - **MainScripts**
   - `Conf.py` - Configuration settings.
   - `Preprocessing.ipynb` - Notebook for data preprocessing.
+  - `Diffusion.ipynb` - Notebook for a standard diffusion implementation.
+  - `Vocoder.ipynb` - Notebook for a Vocoder implementation.
+  - `Diffusion Autoencoder.ipynb` -Notebook containing a full diffusion autoencoder.
+
+  The Following files are no longer used:
   - `Train Diffusion.ipynb` - Notebook for training the diffusion model.
   - `Eval Diffusion.ipynb` - Notebook for evaluating the diffusion model.
   - `Train VAE.ipynb` - Notebook for training the VAE.
@@ -62,6 +70,9 @@
   - `Librosa`: 0.10.2 (Depending on the python version might require `standard-sunau`, `standard-aifc` and `standard-chunk` which have been removed from the pre-installed libraries in newer python versions.)
   - `Matplotlib`: 3.10.0
   - `Soundfile`: 0.13.1
+  - `audio-diffusion-pytorch` : 0.1.3
+  - `audio-encoders-pytorch` : 0.0.22
+
 
 - **Pre-Installed Libraries**
   - `os`
@@ -72,7 +83,7 @@
 
 ### Neural Nets
 
-Inorder to view the Neural Nets Netron can be used with .pt files the code for the generation of this file can be found in the eval file.
+Inorder to view the Neural Nets Netron can be used with .pt files. Those files can be generated using the `save_architecture` function of the `Trainer` class by passing the size of an input tensor to it.
 
 ### Logging
 
@@ -80,7 +91,7 @@ This codebase is based on the logging module. For the minimal output set logging
 
 ### Data
 
-The dataset is created in the preprocessing file. The Model is trained on 4s mono samples with a sample rate of 32Khz. The STFT spectograms then are created with an FFT length of 480 and a HOP length of 288. The spectrograms then are resized to the closest multiple of 32 which makes divisions in the UNET easy. This results in spectograms of shape 1x224x416.
+The dataset is created in the preprocessing file. The Model is trained on 4.6s mono samples with a sample rate of 32Khz.
 
 ## Sources
 
@@ -91,6 +102,7 @@ The dataset is created in the preprocessing file. The Model is trained on 4s mon
 - [Improved DDPM(Nichol et. al 2021)](https://arxiv.org/pdf/2102.09672) (Explanation of cosine schedule).
 - [DDIM(Song et. al 2022)](https://arxiv.org/pdf/2010.02502) (The faster generation method).
 - [Diffusion for music gen. ETH (Flavio Schneider 2023)](https://arxiv.org/pdf/2301.13267) (A good overview over methods).
+- [Moûsai: Efficient Text-to-Music Diffusion Models (Flavio Schneider et. al 2023)](https://arxiv.org/pdf/2301.11757) (Discrete implementations of the methods proposed in the Diffusion paper by Flavio Schneider)
 
 ### Youtube Videos
 
