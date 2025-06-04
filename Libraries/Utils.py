@@ -401,8 +401,6 @@ def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int
         ndarray: An audio file
     """
     logger.light_debug("Started GL")
-    if spec.shape[0] != len_fft // 2 + 1:
-        spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
     if log:
         spec = np.exp(spec)
     audio: ndarray = librosa.feature.inverse.mel_to_audio(spec, sr=sample_rate, n_fft=len_fft, hop_length=hop_length)
