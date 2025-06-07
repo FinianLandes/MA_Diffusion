@@ -413,7 +413,7 @@ class Diffusion():
 
         Args:
             n_samples (int, optional): Number of samples to generate. If model contains batch norm creating >1 sample is more efficient. Defaults to 8.
-            visual_freq (int, optional): If >0 visualizes the spectogram each n steps. Defaults to 0.
+            visual_freq (int, optional): If >0 visualizes the spectrogram each n steps. Defaults to 0.
 
         Returns:
             ndarray: The generated samples.
@@ -447,7 +447,7 @@ class Diffusion():
                 print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {timesteps - i}/{timesteps} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} noise min/max: {torch.min(pred_noise).item():.5f}, {torch.max(pred_noise).item():.5f} std/mean: {torch.std(pred_noise).item():.5f}, {torch.mean(pred_noise).item():.5f} ", end='', flush=True)
             
             if visual_freq > 0 and i % visual_freq == 0:
-                visualize_spectogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
+                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
 
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
@@ -467,7 +467,7 @@ class Diffusion():
             n_samples (int, optional): Number of samples to generate. If model contains batch norm creating >1 sample is more efficient. Defaults to 8.
             sampling_timesteps (int, optional): Number of actual sampling timesteps. Defaults to 50.
             eta: Stochasticity parameter (0.0 for deterministic, 1.0 for DDPM-like stochasticity). Defaults to 0. 
-            visual_freq (int, optional): If >0 visualizes the spectogram each n steps. Defaults to 0.
+            visual_freq (int, optional): If >0 visualizes the spectrogram each n steps. Defaults to 0.
 
         Returns:
             ndarray: The generated samples.
@@ -504,7 +504,7 @@ class Diffusion():
                 print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {sampling_timesteps - i}/{sampling_timesteps} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} noise min/max: {torch.min(pred_noise).item():.5f}, {torch.max(pred_noise).item():.5f} std/mean: {torch.std(pred_noise).item():.5f}, {torch.mean(pred_noise).item():.5f} ", end='', flush=True)
             
             if visual_freq > 0 and i % visual_freq == 0:
-                visualize_spectogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
+                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)
@@ -537,7 +537,7 @@ class Diffusion():
                 print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {sampling_timesteps - i:04d}/{sampling_timesteps:04d} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} std/mean: {torch.std(x).item():.5f}, {torch.mean(x).item():.5f} ", end='', flush=True)
             
             if visual_freq > 0 and i % visual_freq == 0:
-                visualize_spectogram(normalize(x.cpu().numpy()[0, 0], -1, 1), conf["audio"].sample_rate, conf["audio"].len_fft)
+                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1), conf["audio"].sample_rate, conf["audio"].len_fft)
 
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
@@ -550,12 +550,12 @@ class Diffusion():
             self.ema.restore()
         return x.cpu().numpy()
     
-    def visualize_diffusion_steps(self, x: Tensor, n_spectograms: int = 5) -> None:
-        """Visualizes the noise schedule applied to a spectogram.
+    def visualize_diffusion_steps(self, x: Tensor, n_spectrograms: int = 5) -> None:
+        """Visualizes the noise schedule applied to a spectrogram.
 
         Args:
-            x (Tensor): The spectograms to show if more than one are provided first one is shown.
-            n_spectograms (int, optional): Number of steps to visualize. Defaults to 5.
+            x (Tensor): The spectrograms to show if more than one are provided first one is shown.
+            n_spectrograms (int, optional): Number of steps to visualize. Defaults to 5.
         """
         if x.dim() == 3:
             x = x.to(self.device).unsqueeze(1)
@@ -563,13 +563,13 @@ class Diffusion():
             x = x.to(self.device)
         batch_size = x.shape[0]
 
-        step_size = self.T // n_spectograms
-        selected_timesteps = [i * step_size for i in range(n_spectograms)]
+        step_size = self.T // n_spectrograms
+        selected_timesteps = [i * step_size for i in range(n_spectrograms)]
 
         for t in selected_timesteps:
             timesteps = torch.full((batch_size,), t, dtype=torch.long, device=self.device)
             x_t, _ = self.noise_data(x, timesteps)
             
             logger.info(f"Visualizing spectrogram at timestep t={t}")
-            visualize_spectogram(x_t[0, 0].cpu().numpy())
+            visualize_spectrogram(x_t[0, 0].cpu().numpy())
 

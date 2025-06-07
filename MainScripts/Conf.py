@@ -9,7 +9,7 @@ class Paths:
     model_path: str = "../Models"
 
 class Audio:
-    """Settings for audio processing and spectograms."""
+    """Settings for audio processing and spectrograms."""
     sample_rate: int = 32000
     time_frame_s: float = 4.6
     overlap:int = 1

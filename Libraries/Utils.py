@@ -43,28 +43,28 @@ def load_audio_file(path: str, sample_rate: int = 44100, to_mono: bool = True) -
     logger.light_debug(f"Loaded audio form {path} of dimensions: {audio.shape}, sr: {sample_rate}")
     return audio
 
-def load_spectogram(path: str) -> ndarray:
-    """Loads a spectogram to np array.
+def load_spectrogram(path: str) -> ndarray:
+    """Loads a spectrogram to np array.
 
     Args:
-        path (str): Path to spectogram.
+        path (str): Path to spectrogram.
 
     Returns:
         ndarray: _description_
     """
-    spectogram: ndarray = np.load(path)["stft"]
-    logger.light_debug(f"Spectogram loaded from {path} of shape: {spectogram.shape}")
-    return spectogram
+    spectrogram: ndarray = np.load(path)["stft"]
+    logger.light_debug(f"spectrogram loaded from {path} of shape: {spectrogram.shape}")
+    return spectrogram
 
-def save_spectogram(spectogram: ndarray, path: str) -> None:
-    """Saves Spectogram to path.
+def save_spectrogram(spectrogram: ndarray, path: str) -> None:
+    """Saves spectrogram to path.
 
     Args:
-        spectogram (ndarray): A Spectogram.
+        spectrogram (ndarray): A spectrogram.
         path (str): Path to save to.
     """
-    np.savez_compressed(path, stft=spectogram)
-    logger.light_debug(f"Saved spectogram to:{path}")
+    np.savez_compressed(path, stft=spectrogram)
+    logger.light_debug(f"Saved spectrogram to:{path}")
 
 def save_training_data(data: ndarray, path: str) -> None:
     """Saves numpy array to path.
@@ -192,38 +192,38 @@ def create_dataloader(data: Dataset, batch_size: int, shuffle: bool = False) -> 
     """
     return DataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
 
-# Spectograms
+# spectrograms
 def audio_to_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
-    """Converts audio to stft spectograms and optionally converts the spectograms to log scale.
+    """Converts audio to stft spectrograms and optionally converts the spectrograms to log scale.
 
     Args:
         audio (ndarray): Audio data._
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
-        log (bool, optional): If true converts spectogram to log scale. Defaults to True.
+        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
 
     Returns:
-        ndarray: An stft spectogram.
+        ndarray: An stft spectrogram.
     """
     logger.light_debug("Started STFT")
     stft = librosa.stft(audio, n_fft=len_fft, hop_length=hop_length)
     spec = np.abs(stft)
     if log:
         spec = np.log(spec + 1e-6)
-    logger.light_debug(f"Created spectogram: {spec.shape}")
+    logger.light_debug(f"Created spectrogram: {spec.shape}")
     return spec
 
-def audio_splits_to_spectograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
-    """Converts a numpy array containing multiple samples to stft spectograms and optionally converts the spectograms to log scale.
+def audio_splits_to_spectrograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
+    """Converts a numpy array containing multiple samples to stft spectrograms and optionally converts the spectrograms to log scale.
 
     Args:
         audio (ndarray): Audio data._
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
-        log (bool, optional): If true converts spectogram to log scale. Defaults to True.
+        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
 
     Returns:
-        ndarray: An numpy array containing the stft spectograms.
+        ndarray: An numpy array containing the stft spectrograms.
     """
     logger.light_debug("Started STFT on splits")
     specs: list = []
@@ -238,17 +238,17 @@ def audio_splits_to_spectograms(audio: ndarray, len_fft: int = 4096, hop_length:
     if logger.getEffectiveLevel() == LIGHT_DEBUG:
         print()
     specs: ndarray = np.array(specs)
-    logger.light_debug(f"Created spectograms of splits: {specs.shape}")
+    logger.light_debug(f"Created spectrograms of splits: {specs.shape}")
     return specs
 
 def spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
-    """Uses Griffinlim to convert a spectogram to audio.
+    """Uses Griffinlim to convert a spectrogram to audio.
 
     Args:
-        spec (ndarray): An STFT spectogram.
+        spec (ndarray): An STFT spectrogram.
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
-        log (bool, optional): Set to true if spectogram is in log scale. Defaults to True.
+        log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
 
     Returns:
         ndarray: An audio file
@@ -303,7 +303,7 @@ def normalize_filewise(data: ndarray, min_val: float = -1, max_val: float = 1) -
     return normalized_data
 
 def unnormalize(data: ndarray, min_val: float = -50, max_val: float = 50) -> ndarray:
-    """Convenience function, does the same as normalize but is set to unnormalize to spectogram range.
+    """Convenience function, does the same as normalize but is set to unnormalize to spectrogram range.
 
     Args:
         data (ndarray): Data.
@@ -335,42 +335,42 @@ def dimension_for_VAE(data: ndarray) -> ndarray:
         data = data[...,:(data.shape[-2] // 32) * 32, :]
     return data
 
-def audio_to_mel_spectogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
-    """Creates a mel spectogram from an audio file.
+def audio_to_mel_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
+    """Creates a mel spectrogram from an audio file.
 
     Args:
         audio (ndarray): Audio data.
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
         sample_rate (int, optional): Sample rate. Defaults to 44100.
-        log (bool, optional): If true converts spectogram to log scale. Defaults to True.
-        min_freq (int, optional): Sets the minimal frequency represented by spectogram. Defaults to 30.
+        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
+        min_freq (int, optional): Sets the minimal frequency represented by spectrogram. Defaults to 30.
         n_mels (int, optional): Number of mel bins. Defaults to 128.
 
     Returns:
-        ndarray: Mel Spectogram.
+        ndarray: Mel spectrogram.
     """
     logger.light_debug("Started Mel-Spec")
     spec = librosa.feature.melspectrogram(y=audio, n_fft=len_fft, hop_length=hop_length, sr=sample_rate, fmin=min_freq, n_mels=n_mels)
     if log:
         spec = np.log(spec + 1e-6)
-    logger.light_debug(f"Created mel-spectogram: {spec.shape}")
+    logger.light_debug(f"Created mel-spectrogram: {spec.shape}")
     return spec
 
-def audio_splits_to_mel_spectograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
-    """Creates mel spectograms from audio samples.
+def audio_splits_to_mel_spectrograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
+    """Creates mel spectrograms from audio samples.
 
     Args:
         audio (ndarray): Audio samples.
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
         sample_rate (int, optional): Sample rate. Defaults to 44100.
-        log (bool, optional): If true converts spectogram to log scale. Defaults to True.
-        min_freq (int, optional): Sets the minimal frequency represented by spectogram. Defaults to 30.
+        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
+        min_freq (int, optional): Sets the minimal frequency represented by spectrogram. Defaults to 30.
         n_mels (int, optional): Number of mel bins. Defaults to 128.
 
     Returns:
-        ndarray: Mel Spectograms.
+        ndarray: Mel spectrograms.
     """
     logger.light_debug("Started Mel-Spec on splits")
     specs: list = []
@@ -384,18 +384,18 @@ def audio_splits_to_mel_spectograms(audio: ndarray, len_fft: int = 4096, hop_len
     if logger.getEffectiveLevel() == LIGHT_DEBUG:
         print()
     specs: ndarray = np.array(specs)
-    logger.light_debug(f"Created Mel-spectograms of splits: {specs.shape}")
+    logger.light_debug(f"Created Mel-spectrograms of splits: {specs.shape}")
     return specs
 
 def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True) -> ndarray:
-    """Uses Griffinlim to convert a mel-spectogram to audio.
+    """Uses Griffinlim to convert a mel-spectrogram to audio.
 
     Args:
-        spec (ndarray): An STFT spectogram.
+        spec (ndarray): An STFT spectrogram.
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
         sample_rate (int, optional): Sample rate. Defaults to 44100.
-        log (bool, optional): Set to true if spectogram is in log scale. Defaults to True.
+        log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
 
     Returns:
         ndarray: An audio file
@@ -442,11 +442,11 @@ def spectral_convergence(spectrogram: ndarray, len_fft: int = 4096, hop_length: 
     """Measure spectral convergence of a generated spectrogram.
 
     Args:
-        spectrogram (ndarray): Spectogram.
+        spectrogram (ndarray): spectrogram.
         len_fft (int, optional): STFT FFT length. Defaults to 1024.
         hop_length (int, optional): STFT hop length. Defaults to 512.
         sample_rate (int, optional): Samplerate. Defaults to 44100.
-        log (bool, optional): Set to true if spectogram is in log scale. Defaults to True.
+        log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
 
     Returns:
         float: Spectral convergence score.
@@ -507,16 +507,16 @@ def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch"
         plt.ylabel = y_label
     plt.show()
 
-def visualize_spectogram(spectogram: ndarray, sample_rate: int = 44100, len_fft: int = 4096) -> None:
-    """Plots a spectogram.
+def visualize_spectrogram(spectrogram: ndarray, sample_rate: int = 44100, len_fft: int = 4096) -> None:
+    """Plots a spectrogram.
 
     Args:
-        spectogram (ndarray): Spectogram.
+        spectrogram (ndarray): spectrogram.
         sample_rate (int, optional): Sample rate. Defaults to 44100.
         len_fft (int, optional): STFT FTT length. Defaults to 4096.
     """
     plt.figure(figsize=(10, 4))
-    librosa.display.specshow(spectogram, sr=sample_rate, n_fft=len_fft)
+    librosa.display.specshow(spectrogram, sr=sample_rate, n_fft=len_fft)
     plt.show()
 
 
@@ -536,7 +536,7 @@ def count_parameters(model: nn.Module) -> str:
             n = round(n / key, 3)
             return f"~{str(n)[:5]}{val}"
 class Audio_Data(Dataset):
-    def __init__(self, data: ndarray, labels: ndarray = None, dtype: torch.dtype = torch.float32) -> None:
+    def __init__(self, data: ndarray, labels: ndarray = None, dt: torch.dtype = torch.float32) -> None:
         """Creates a torch dataloader. 
 
         Args:
@@ -544,11 +544,16 @@ class Audio_Data(Dataset):
             labels (ndarray, optional): If labels are not given labels are set to be the data. Defaults to None.
             dtype (torch.dtype, optional): Datatype. Defaults to torch.float32.
         """
-        self.data = torch.tensor(data, dtype=dtype)
-        if labels != None:
-            self.labels = torch.tensor(labels, dtype=dtype) 
+        if type(data) is not  Tensor:
+            data: Tensor = torch.tensor(data)
+        if type(labels) is not Tensor and labels is not None:
+            labels: Tensor = torch.tensor(labels)
+        
+        if labels is not None:
+            self.labels = labels.to(dtype=dt) 
         else:
-            self.labels = torch.tensor(data, dtype=dtype)
+            self.labels = data.to(dtype=dt) 
+        self.data = data.to(dtype=dt)
     def __len__(self):
         return len(self.data)
     def __getitem__(self, idx):
