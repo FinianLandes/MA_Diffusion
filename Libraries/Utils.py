@@ -179,18 +179,19 @@ def split_audiofile(audio: ndarray, time: float, sample_rate: int = 44100, overl
     logger.light_debug(f"Split audio to: {data.shape}")
     return data
 
-def create_dataloader(data: Dataset, batch_size: int, shuffle: bool = False) -> DataLoader:
+def create_dataloader(data: Dataset, batch_size: int, shuffle: bool = False, num_workers: int = 1) -> DataLoader:
     """Creates a torch dataloader. Optionally shuffles the data.
 
     Args:
         data (Dataset): The dataloader data.
         batch_size (int): Batch size.
         shuffle (bool, optional): If true schuffles data. Defaults to False.
+        num_workers(int, optional): Sets number of workers. Defaults to 1.
 
     Returns:
         DataLoader: The torch Dataloader.
     """
-    return DataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle)
+    return DataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
 
 # spectrograms
 def audio_to_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
