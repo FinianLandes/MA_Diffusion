@@ -25,6 +25,7 @@
 | >02.06.2025 | Getting wy better results with the standard diffusion process, loss of 9.4e-2. Butt missing a lot of temporal features such as longer notes. Also due to the change to mel spectrograms. A Vocoder would be needed to obtain a audio sample of the spectrograms. Therefore i switched to the Diffusion autoencoder as proposed in the Mousai paper. This takes way longer to train. 10mins per epcoh with 1000 samples. but in theory should yield better results and also acts as a vocoder so no second model is needed. Besides that there is some unclarity in the setup of the encoder as that is not mentioned in a paper so i'm just guessing which params go there. | |
 | >03.06.2025 | Trying to get the audioencoder to work, switch to the magnitude encoder like it was used in mousai, also contacted flavio schneider about the odd missmacht from encoder and inject.||
 | >07.06.2025 | Implemented MelGan to be able to convert mel to waveform. Getting results, but still very noisy. | |
+| >10.06.2025 | Getting some results. Trying to optimize hyperparams using optuna. sevcondly trying to train an upsampler for the diffusion model. | |
 
 ## General Info
 

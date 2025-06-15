@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 import torch.optim as optim
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim import Optimizer
+import optuna
 # Utils
 import numpy as np
 from numpy import ndarray
@@ -741,8 +742,7 @@ class Trainer():
 
     def visualize_samples(self, samples: ndarray) -> None:
         for sample in samples:
-            plt.imshow(normalize(sample, -1, 1), cmap = "PuRd", origin="lower")
-            plt.show()
+            visualize_spectrogram(normalize(sample, -1, 1), sample_rate=32000)
     
     def save_samples(self, samples: ndarray, file_path_name: str, sample_rate: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
         for i, sample in enumerate(samples):
@@ -772,3 +772,7 @@ class Trainer():
         avg_true_spectral_cent = avg_true_spectral_cent / 100
         metrics_str: str = f"Spectral Convergence Samples/Real: {avg_sample_spectral_conv:.3f}, {avg_true_spectral_conv:.3f} Spectral Centroid Samples/Real: {avg_sample_spectral_cent:.3f} Hz, {avg_true_spectral_cent:.3f} Hz" if original_dataset is not None else f"Spectral Convergence Samples: {avg_sample_spectral_conv:.3f} Spectral Centroid Samples: {avg_sample_spectral_cent:.3f} Hz"
         print(metrics_str)
+
+class Optimizer():
+    def __init__(self) -> None:
+        pass
