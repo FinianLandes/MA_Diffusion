@@ -26,6 +26,7 @@
 | >03.06.2025 | Trying to get the audioencoder to work, switch to the magnitude encoder like it was used in mousai, also contacted flavio schneider about the odd missmacht from encoder and inject.||
 | >07.06.2025 | Implemented MelGan to be able to convert mel to waveform. Getting results, but still very noisy. | |
 | >10.06.2025 | Getting some results. Trying to optimize hyperparams using optuna. sevcondly trying to train an upsampler for the diffusion model. | |
+| >17.06.2025 | Implemented HiFiGAN which gets me better results as melGAN trying to train the diffusion more to produce better spectrograms and also trying to train an enhancer working on the waveform for HiFiGAN to possibly remove the current aliasing. | |
 
 ## General Info
 

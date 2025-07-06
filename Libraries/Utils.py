@@ -10,7 +10,8 @@ import optuna
 import numpy as np
 from numpy import ndarray
 import matplotlib.pyplot as plt
-import librosa, os, logging, time, soundfile
+import librosa, os, logging, time, soundfile, midi2audio, tempfile
+from midi2audio import FluidSynth
 from scipy.signal import butter, lfilter
 from typing import Callable
 #Logging
@@ -27,21 +28,21 @@ logging.Logger.light_debug = light_debug
 logger = logging.getLogger(__name__)
 
 # Loading and Saving Data
-def load_audio_file(path: str, sample_rate: int = 44100, to_mono: bool = True) -> ndarray:
+def load_audio_file(path: str, sr: int = 44100, to_mono: bool = True) -> ndarray:
     """Loads an audio file, casts it to the given sample rate and returns a numpy array.
 
     Args:
         path (str): The file path.
-        sample_rate (int, optional): The sample rate to cast the audio to. Defaults to 44100.
+        sr (int, optional): The sample rate to cast the audio to. Defaults to 44100.
         to_mono (bool, optional): If true converts audio to mono if stereo. Defaults to True.
 
     Returns:
         ndarray: returns a 1-D if mono or 2-D if stereo ndarray
     """
-    audio, current_sample_rate = librosa.load(path, sr=None, mono=to_mono) 
-    if current_sample_rate != sample_rate:
-        audio = librosa.resample(audio, orig_sr=current_sample_rate, target_sr=sample_rate)
-    logger.light_debug(f"Loaded audio form {path} of dimensions: {audio.shape}, sr: {sample_rate}")
+    audio, current_sr = librosa.load(path, sr=None, mono=to_mono) 
+    if current_sr != sr:
+        audio = librosa.resample(audio, orig_sr=current_sr, target_sr=sr)
+    logger.light_debug(f"Loaded audio form {path} of dimensions: {audio.shape}, sr: {sr}")
     return audio
 
 def load_spectrogram(path: str) -> ndarray:
@@ -94,16 +95,16 @@ def load_training_data(path: str) -> ndarray:
     logger.light_debug(f"Ndarray loaded from {path} of shape: {data.shape}")
     return data
 
-def save_audio_file(audio: ndarray, path: str, sample_rate: int = 44100) -> None:
+def save_audio_file(audio: ndarray, path: str, sr: int = 44100) -> None:
     """Saves an numpy array as audiofile, normalizes the audio if needed.
     Args:
         audio (ndarray): Audio data, 1-D or 2-D array.
         path (str): Filepath has to end with the filetype e.g. .wav.
-        sample_rate (int, optional): Samplerate of the audio. Defaults to 44100.
+        sr (int, optional): Samplerate of the audio. Defaults to 44100.
     """
     if audio.dtype != np.int16:
         audio = normalize(audio, -0.99999, 0.99999)
-    soundfile.write(path, audio, sample_rate)
+    soundfile.write(path, audio, sr)
     logger.light_debug(f"Saved file to:{path}")
 
 def get_filenames_from_folder(path: str, filetype: str = None) -> list:
@@ -150,20 +151,20 @@ def del_if_exists(path: str) -> None:
         logger.light_debug(f"{path} could not be deleted")
 
 # Other Manipulations
-def split_audiofile(audio: ndarray, time: float, sample_rate: int = 44100, overlap_s: float = 0) -> ndarray:
+def split_audiofile(audio: ndarray, time: float, sr: int = 44100, overlap_s: float = 0) -> ndarray:
     """Splits audio into samples of length time, with an optional overlap. Pads the last file with zeroes if necessary.
 
     Args:
         audio (ndarray): Audiofile.
         time (float): Sample length in s.
-        sample_rate (int, optional): Sample rate. Defaults to 44100.
+        sr (int, optional): Sample rate. Defaults to 44100.
         overlap_s (float, optional): Overlap of the samples in s. Defaults to 0.
 
     Returns:
         ndarray: Nd-array containing the audiosplits.
     """
-    samples: int = int(sample_rate * time)
-    samples_overlap: int = int(sample_rate * overlap_s)
+    samples: int = int(sr * time)
+    samples_overlap: int = int(sr * overlap_s)
     if overlap_s == 0:
         pad: int = len(audio) % samples
         audio = np.pad(audio, (0, samples - pad))
@@ -179,6 +180,19 @@ def split_audiofile(audio: ndarray, time: float, sample_rate: int = 44100, overl
 
     logger.light_debug(f"Split audio to: {data.shape}")
     return data
+
+def midi2ndarray(path: str, sr: int = 32000, sf_path: str = "UprightPiano.sf2") -> ndarray:
+    fs = FluidSynth(sf_path, sample_rate=sr)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
+        fs.midi_to_audio(path, temp_wav.name)
+        print("Converted")
+        audio, _ = soundfile.read(temp_wav.name)
+        os.unlink(temp_wav.name)
+    return audio
+
+def patch_safe_audio(audio_lst: ndarray, path: str, sr: int = 32000) -> None:
+    audio = np.concatenate(audio_lst)
+    save_audio_file(audio, path, sr)
 
 def create_dataloader(data: Dataset, batch_size: int, shuffle: bool = False, num_workers: int = 1) -> DataLoader:
     """Creates a torch dataloader. Optionally shuffles the data.
@@ -337,14 +351,14 @@ def dimension_for_VAE(data: ndarray) -> ndarray:
         data = data[...,:(data.shape[-2] // 32) * 32, :]
     return data
 
-def audio_to_mel_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
+def audio_to_mel_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
     """Creates a mel spectrogram from an audio file.
 
     Args:
         audio (ndarray): Audio data.
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
-        sample_rate (int, optional): Sample rate. Defaults to 44100.
+        sr (int, optional): Sample rate. Defaults to 44100.
         log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
         min_freq (int, optional): Sets the minimal frequency represented by spectrogram. Defaults to 30.
         n_mels (int, optional): Number of mel bins. Defaults to 128.
@@ -353,20 +367,20 @@ def audio_to_mel_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: in
         ndarray: Mel spectrogram.
     """
     logger.light_debug("Started Mel-Spec")
-    spec = librosa.feature.melspectrogram(y=audio, n_fft=len_fft, hop_length=hop_length, sr=sample_rate, fmin=min_freq, n_mels=n_mels)
+    spec = librosa.feature.melspectrogram(y=audio, n_fft=len_fft, hop_length=hop_length, sr=sr, fmin=min_freq, n_mels=n_mels)
     if log:
         spec = np.log(spec + 1e-6)
     logger.light_debug(f"Created mel-spectrogram: {spec.shape}")
     return spec
 
-def audio_splits_to_mel_spectrograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
+def audio_splits_to_mel_spectrograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
     """Creates mel spectrograms from audio samples.
 
     Args:
         audio (ndarray): Audio samples.
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
-        sample_rate (int, optional): Sample rate. Defaults to 44100.
+        sr (int, optional): Sample rate. Defaults to 44100.
         log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
         min_freq (int, optional): Sets the minimal frequency represented by spectrogram. Defaults to 30.
         n_mels (int, optional): Number of mel bins. Defaults to 128.
@@ -377,7 +391,7 @@ def audio_splits_to_mel_spectrograms(audio: ndarray, len_fft: int = 4096, hop_le
     logger.light_debug("Started Mel-Spec on splits")
     specs: list = []
     for i,split in enumerate(audio):
-        spec = librosa.feature.melspectrogram(y=split, n_fft=len_fft, hop_length=hop_length, sr=sample_rate, fmin=min_freq, n_mels=n_mels)
+        spec = librosa.feature.melspectrogram(y=split, n_fft=len_fft, hop_length=hop_length, sr=sr, fmin=min_freq, n_mels=n_mels)
         if log:
             spec = np.log(spec + 1e-6)
         specs.append(spec)
@@ -389,14 +403,14 @@ def audio_splits_to_mel_spectrograms(audio: ndarray, len_fft: int = 4096, hop_le
     logger.light_debug(f"Created Mel-spectrograms of splits: {specs.shape}")
     return specs
 
-def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True) -> ndarray:
+def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True) -> ndarray:
     """Uses Griffinlim to convert a mel-spectrogram to audio.
 
     Args:
         spec (ndarray): An STFT spectrogram.
         len_fft (int, optional): STFT FFT length. Defaults to 4096.
         hop_length (int, optional): STFT hop length. Defaults to 512.
-        sample_rate (int, optional): Sample rate. Defaults to 44100.
+        sr (int, optional): Sample rate. Defaults to 44100.
         log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
 
     Returns:
@@ -405,24 +419,24 @@ def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int
     logger.light_debug("Started GL")
     if log:
         spec = np.exp(spec)
-    audio: ndarray = librosa.feature.inverse.mel_to_audio(spec, sr=sample_rate, n_fft=len_fft, hop_length=hop_length)
+    audio: ndarray = librosa.feature.inverse.mel_to_audio(spec, sr=sr, n_fft=len_fft, hop_length=hop_length)
     audio = normalize(audio, -0.99999, 0.99999)
     logger.light_debug(f"Reconstructed audio: {audio.shape}")
     return audio
 
-def sdr(audio: ndarray, sample_rate: int = 44100, cutoff: int = 4000) -> float:
+def sdr(audio: ndarray, sr: int = 44100, cutoff: int = 4000) -> float:
     """
     Approximate SDR without a reference by comparing audio to a low-pass filtered version.
     
     Args:
         audio (np.ndarray): Generated waveform.
-        sample_rate (int): Sampling rate in Hz.
+        sr (int): Sampling rate in Hz.
         cutoff (float): Cutoff frequency for low-pass filter (Hz).
     
     Returns:
         float: SDR in dB.
     """
-    nyquist = sample_rate / 2
+    nyquist = sr / 2
     normal_cutoff = cutoff / nyquist
     b, a = butter(4, normal_cutoff, btype='low', analog=False)
     
@@ -440,14 +454,14 @@ def sdr(audio: ndarray, sample_rate: int = 44100, cutoff: int = 4000) -> float:
     logger.light_debug("Calculated SDR")
     return sdr
 
-def spectral_convergence(spectrogram: ndarray, len_fft: int = 4096, hop_length: int = 512, sample_rate: int = 44100, log: bool = True) -> float:
+def spectral_convergence(spectrogram: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True) -> float:
     """Measure spectral convergence of a generated spectrogram.
 
     Args:
         spectrogram (ndarray): spectrogram.
         len_fft (int, optional): STFT FFT length. Defaults to 1024.
         hop_length (int, optional): STFT hop length. Defaults to 512.
-        sample_rate (int, optional): Samplerate. Defaults to 44100.
+        sr (int, optional): Samplerate. Defaults to 44100.
         log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
 
     Returns:
@@ -509,16 +523,16 @@ def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch"
         plt.ylabel = y_label
     plt.show()
 
-def visualize_spectrogram(spectrogram: ndarray, sample_rate: int = 44100, len_fft: int = 4096) -> None:
+def visualize_spectrogram(spectrogram: ndarray, sr: int = 44100, len_fft: int = 4096) -> None:
     """Plots a spectrogram.
 
     Args:
         spectrogram (ndarray): spectrogram.
-        sample_rate (int, optional): Sample rate. Defaults to 44100.
+        sr (int, optional): Sample rate. Defaults to 44100.
         len_fft (int, optional): STFT FTT length. Defaults to 4096.
     """
     plt.figure(figsize=(10, 4))
-    librosa.display.specshow(spectrogram, sr=sample_rate, n_fft=len_fft)
+    librosa.display.specshow(spectrogram, sr=sr, n_fft=len_fft)
     plt.show()
 
 
@@ -571,7 +585,7 @@ class Trainer():
         self.embed_dim = embed_dim
         self.n_dims = n_dims
 
-    def train(self, train_dataset: DataLoader, n_epochs: int, full_model_path: str, checkpoint_freq: int = 0, val_dataset: DataLoader = None, patience: int = -1, gradient_clip_norm: float| None = None, gradient_clip_val: float | None = None, use_embed: bool = False, sample_freq: int | None = None) -> tuple[list[float], list[float]]:
+    def train(self, train_dataset: DataLoader, n_epochs: int, full_model_path: str, checkpoint_freq: int = 0, val_dataset: DataLoader = None, patience: int = -1, gradient_clip_norm: float| None = None, gradient_clip_val: float | None = None, sample_freq: int | None = None) -> tuple[list[float], list[float] | None]:
         logger.info(f"Training started on {self.device}")
         if self.device == "cuda":
             self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
@@ -596,10 +610,7 @@ class Trainer():
                 else:
                     x = x.to(self.device)
                 with torch.autocast(device_type=self.device):
-                    if use_embed:
-                        loss = self.model(x, embedding=self.embed_fun(y, self.embed_dim).to(self.device))
-                    else:
-                        loss = self.model(x)
+                    loss = self.model(x)
 
                 loss.backward()
 
@@ -631,10 +642,7 @@ class Trainer():
                         else:
                             x = x.to(self.device)
                         with torch.no_grad():
-                            if use_embed:
-                                loss = self.model(x, embedding=self.embed_fun(y, self.embed_dim).to(self.device))
-                            else:
-                                loss = self.model(x)
+                            loss = self.model(x)
                             validation_loss += loss.item()
                     validation_loss = validation_loss / len(val_dataset)
                     val_loss_list.append(validation_loss)
@@ -662,6 +670,8 @@ class Trainer():
                 
                 if sample_freq is not None and (e + 1) % sample_freq == 0:
                     x, _ = next(iter(train_dataset))
+                    if x.dim() == self.n_dims + 1:
+                        x = x.unsqueeze(1)
                     c, h, w = x.shape[-3], x.shape[-2], x.shape[-1]
                     if self.n_dims == 2:
                         self.sample(2, [2, c, h, w], 10, True)
@@ -742,28 +752,28 @@ class Trainer():
 
     def visualize_samples(self, samples: ndarray) -> None:
         for sample in samples:
-            visualize_spectrogram(normalize(sample, -1, 1), sample_rate=32000)
+            visualize_spectrogram(normalize(sample, -1, 1), sr=32000)
     
-    def save_samples(self, samples: ndarray, file_path_name: str, sample_rate: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
+    def save_samples(self, samples: ndarray, file_path_name: str, sr: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
         for i, sample in enumerate(samples):
             audio = spectrogram_to_audio(unnormalize(sample), len_fft, len_hop)
-            save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sample_rate=sample_rate)
+            save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sr=sr)
     
-    def get_audio_metrics(self, samples: ndarray, original_dataset: ndarray = None, sample_rate: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
+    def get_audio_metrics(self, samples: ndarray, original_dataset: ndarray = None, sr: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
         avg_sample_spectral_conv: float = 0
         avg_sample_spectral_cent: float = 0
         avg_true_spectral_conv: float = 0
         avg_true_spectral_cent: float = 0
         for sample in samples:
-            avg_sample_spectral_conv += spectral_convergence(sample, sample_rate=sample_rate, len_fft=len_fft, hop_length=len_hop)
-            avg_sample_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sample_rate))
+            avg_sample_spectral_conv += spectral_convergence(sample, sr=sr, len_fft=len_fft, hop_length=len_hop)
+            avg_sample_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sr))
 
         if original_dataset is not None:
             indices: list = np.random.choice(len(original_dataset), 100)
             for idx in indices:
                 sample = original_dataset[idx]
-                avg_true_spectral_conv += spectral_convergence(sample, sample_rate=sample_rate, len_fft=len_fft, hop_length=len_hop)
-                avg_true_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sample_rate))
+                avg_true_spectral_conv += spectral_convergence(sample, sr=sr, len_fft=len_fft, hop_length=len_hop)
+                avg_true_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sr))
 
         n = len(samples)
         avg_sample_spectral_conv = avg_sample_spectral_conv / n
@@ -772,7 +782,3 @@ class Trainer():
         avg_true_spectral_cent = avg_true_spectral_cent / 100
         metrics_str: str = f"Spectral Convergence Samples/Real: {avg_sample_spectral_conv:.3f}, {avg_true_spectral_conv:.3f} Spectral Centroid Samples/Real: {avg_sample_spectral_cent:.3f} Hz, {avg_true_spectral_cent:.3f} Hz" if original_dataset is not None else f"Spectral Convergence Samples: {avg_sample_spectral_conv:.3f} Spectral Centroid Samples: {avg_sample_spectral_cent:.3f} Hz"
         print(metrics_str)
-
-class Optimizer():
-    def __init__(self) -> None:
-        pass

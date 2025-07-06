@@ -10,7 +10,7 @@ class Paths:
 
 class Audio:
     """Settings for audio processing and spectrograms."""
-    sample_rate: int = 32000
+    sr: int = 32000
     time_frame_s: float = 4.6
     overlap:int = 1
 

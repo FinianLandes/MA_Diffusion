@@ -447,7 +447,7 @@ class Diffusion():
                 print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {timesteps - i}/{timesteps} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} noise min/max: {torch.min(pred_noise).item():.5f}, {torch.max(pred_noise).item():.5f} std/mean: {torch.std(pred_noise).item():.5f}, {torch.mean(pred_noise).item():.5f} ", end='', flush=True)
             
             if visual_freq > 0 and i % visual_freq == 0:
-                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
+                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sr, conf["audio"].len_fft )
 
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
@@ -504,7 +504,7 @@ class Diffusion():
                 print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {sampling_timesteps - i}/{sampling_timesteps} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} noise min/max: {torch.min(pred_noise).item():.5f}, {torch.max(pred_noise).item():.5f} std/mean: {torch.std(pred_noise).item():.5f}, {torch.mean(pred_noise).item():.5f} ", end='', flush=True)
             
             if visual_freq > 0 and i % visual_freq == 0:
-                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sample_rate, conf["audio"].len_fft )
+                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1),conf["audio"].sr, conf["audio"].len_fft )
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
             print(flush=True)
@@ -537,7 +537,7 @@ class Diffusion():
                 print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Sampling timestep {sampling_timesteps - i:04d}/{sampling_timesteps:04d} X min/max: {torch.min(x).item():.5f}, {torch.max(x).item():.5f} std/mean: {torch.std(x).item():.5f}, {torch.mean(x).item():.5f} ", end='', flush=True)
             
             if visual_freq > 0 and i % visual_freq == 0:
-                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1), conf["audio"].sample_rate, conf["audio"].len_fft)
+                visualize_spectrogram(normalize(x.cpu().numpy()[0, 0], -1, 1), conf["audio"].sr, conf["audio"].len_fft)
 
 
         if logger.getEffectiveLevel() == LIGHT_DEBUG:
