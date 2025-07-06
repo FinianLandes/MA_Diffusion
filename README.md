@@ -23,10 +23,11 @@
 | >30.05.2025 | Implemented the Trainer class in untils which simplifies training of the eth diffusion. Also added gradient clipping to prevent numerical instability, helped partially still not stable but way better. ||
 | >01.06.2025 | Trying to get closer to the implemntation by Archisound/Mousai. Switched to Mel spectrograms, less bins more info, also switched to a 1D net where the frequency bins are used as channels speeding up computations significantly. Also strated with the vocoder implementation needed to convert a mel spectrogram back to a waveform. ||
 | >02.06.2025 | Getting wy better results with the standard diffusion process, loss of 9.4e-2. Butt missing a lot of temporal features such as longer notes. Also due to the change to mel spectrograms. A Vocoder would be needed to obtain a audio sample of the spectrograms. Therefore i switched to the Diffusion autoencoder as proposed in the Mousai paper. This takes way longer to train. 10mins per epcoh with 1000 samples. but in theory should yield better results and also acts as a vocoder so no second model is needed. Besides that there is some unclarity in the setup of the encoder as that is not mentioned in a paper so i'm just guessing which params go there. | |
-| >03.06.2025 | Trying to get the audioencoder to work, switch to the magnitude encoder like it was used in mousai, also contacted flavio schneider about the odd missmacht from encoder and inject.||
+| >03.06.2025 | Trying to get the audioencoder to work, switch to the magnitude encoder like it was used in mousai, also contacted flavio schneider about the odd missmatch from encoder and inject.||
 | >07.06.2025 | Implemented MelGan to be able to convert mel to waveform. Getting results, but still very noisy. | |
 | >10.06.2025 | Getting some results. Trying to optimize hyperparams using optuna. sevcondly trying to train an upsampler for the diffusion model. | |
 | >17.06.2025 | Implemented HiFiGAN which gets me better results as melGAN trying to train the diffusion more to produce better spectrograms and also trying to train an enhancer working on the waveform for HiFiGAN to possibly remove the current aliasing. | |
+| >06.07.2025 | tried the same models using the maestro dataset to rule out dataset issues. This resulted in even worse outputs.| Will refactor the utils code so it is more sorted so will create a tag at this stage if older files want to be tested. |
 
 ## General Info
 
