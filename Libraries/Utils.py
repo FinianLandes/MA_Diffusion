@@ -10,10 +10,9 @@ import optuna
 import numpy as np
 from numpy import ndarray
 import matplotlib.pyplot as plt
-import librosa, os, logging, time, soundfile, midi2audio, tempfile
+import librosa, os, logging, time, soundfile, tempfile
 from midi2audio import FluidSynth
-from scipy.signal import butter, lfilter
-from typing import Callable
+from typing import Callable, Optional
 #Logging
 LIGHT_DEBUG: int = 15
 
@@ -21,165 +20,332 @@ def light_debug(self, message, *args, **kws) -> None:
     if self.isEnabledFor(LIGHT_DEBUG):
         self._log(LIGHT_DEBUG, message, args, **kws)
 
-
 logging.addLevelName(LIGHT_DEBUG, "LIGHT_DEBUG")
 logging.Logger.light_debug = light_debug
 
 logger = logging.getLogger(__name__)
 
-# Loading and Saving Data
-def load_audio_file(path: str, sr: int = 44100, to_mono: bool = True) -> ndarray:
-    """Loads an audio file, casts it to the given sample rate and returns a numpy array.
+class AudioData():
+    def __init__(self, data: Optional[ndarray] = None, spec_data: Optional[ndarray] = None, sr: int = 32000, metadata: Optional[dict] = None) -> None:
+        self.data = data
+        self.spec_data = spec_data
+        self.chunks = None
+        self.spec_chunks = None
+        self.sr = sr
+        self.metadata = metadata or {}
+    
+    def load_audio_file(self, path: str, mono: bool = True) -> ndarray:
+        audio, current_sr = librosa.load(path, sr=None, mono=mono)
+        if current_sr != self.sr:
+            audio = librosa.resample(audio, orig_sr=current_sr, target_sr=self.sr)
+        self.data = audio
+        self.metadata["source"] = path
+        self.metadata["shape"] = audio.shape
+        logger.light_debug(f"Loaded audio from {path} of dimensions: {audio.shape}, sr: {self.sr}")
+        return audio
+    
+    def save_audio_file(self, path: str, normalize: bool = True):
+        if self.data is None:
+            raise ValueError("No audio data to save. Load data first.")
+        if not path.endswith([".wav", ".mp3", ".flac"]):
+            path += ".wav"
+        audio = self.data
+        if normalize and audio.dtype != np.int16:
+            audio = self.normalize(audio, -0.99999, 0.99999)
+        soundfile.write(path, audio, self.sr)
+        logger.light_debug(f"Saved audio to: {path}")
+    
+    def split_audiofile(self, length: float, overlap_s: float = 0, normalize: bool = True) -> ndarray:
+        samples: int = int(self.sr * length)
+        samples_overlap: int = int(self.sr * overlap_s)
+        if overlap_s == 0:
+            pad: int = len(audio) % samples
+            audio = np.pad(audio, (0, samples - pad))
+            data = np.array(np.split(audio, len(audio) // samples))
+        else:
+            data: list = []
+            for i in range(0, audio.shape[0] - samples + 1, samples - samples_overlap):
+                split: ndarray = audio[i: i + samples]
+                if split.shape[0] != samples:
+                    split = np.pad(split, (0, samples - split.shape[0]))
+                data.append(split)
+            data = np.array(data)
+        if normalize:
+            data = self.normalize_filewise(data)
+        self.chunks = data
+        self.metadata["n_chunks"] = len(data)
+        self.metadata["len_chunk"] = length
+        logger.light_debug(f"Split audio to: {data.shape}")
+        return data
 
-    Args:
-        path (str): The file path.
-        sr (int, optional): The sample rate to cast the audio to. Defaults to 44100.
-        to_mono (bool, optional): If true converts audio to mono if stereo. Defaults to True.
+    def load_spectrogram(self, path: str) -> ndarray:
+        self.spec_data = np.load(path)["stft"]
+        self.metadata["spectogram"]["shape"] = self.spec_data.shape
+        logger.light_debug(f"Spectrogram loaded from {path} of shape: {self.spec_data.shape}")
+        return self.spec_data
+    
+    def save_spectrogram(self, path: str) -> None:
+        if self.spec_data is None:
+            raise ValueError("No spectrogram data to save. Load data first.")
+        np.savez_compressed(path, stft=self.spec_data)
+        logger.light_debug(f"Saved spectrogram to: {path}")
+    
+    def audio_to_spectrogram(self, len_fft: int = 1023, hop_length: int = 256, log: bool = True) -> ndarray:
+        if self.data is None:
+            raise ValueError("No audio data to convert. Load data first.")
+        logger.light_debug("Started STFT")
+        stft = librosa.stft(self.data, n_fft=len_fft, hop_length=hop_length)
+        spec = np.abs(stft)
+        if log:
+            spec = np.log(spec + 1e-6)
+        self.spec_data = spec
+        self.metadata["spectogram"]["shape"] = spec.shape
+        logger.light_debug(f"Created spectrogram: {spec.shape}")
+        return spec
+    
+    def audio_splits_to_spectrograms(self, len_fft: int = 1023, hop_length: int = 256, log: bool = True) -> ndarray:
+        if self.chunks is None:
+            raise ValueError("No audio chunks to convert. Split audio first.")
+        logger.light_debug("Started STFT on splits")
+        specs = []
+        for i, split in enumerate(self.chunks):
+            stft = librosa.stft(split, n_fft=len_fft, hop_length=hop_length)
+            spec = np.abs(stft)
+            if log:
+                spec = np.log(spec + 1e-6)
+            specs.append(spec)
+            if (i + 1) % 10 == 0 and logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT DEBUG - Processed Splits: {i + 1}", end='')
+        if logger.getEffectiveLevel() == 10:
+            print()
+        specs = np.array(specs)
+        self.spec_chunks = specs
+        self.metadata["shape"] = specs.shape
+        logger.debug(f"Created spectrograms of splits: {specs.shape}")
+        return specs
+    
+    def spectrogram_to_audio(self, len_fft: int = 1023, hop_length: int = 256, log: bool = True) -> np.ndarray:
+        if self.spec_data is None:
+            raise ValueError("No spectrogram data to convert. Load or create spectrogram first.")
+        logger.debug("Started GL")
+        spec = self.spec_data
+        if spec.shape[0] != len_fft // 2 + 1:
+            spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
+        if log:
+            spec = np.exp(spec)
+        audio = librosa.griffinlim(spec, n_fft=len_fft, hop_length=hop_length)
+        audio = self.normalize(audio, -0.99999, 0.99999)
+        self.data = audio
+        self.metadata["shape"] = audio.shape
+        logger.debug(f"Reconstructed audio: {audio.shape}")
+        return audio
 
-    Returns:
-        ndarray: returns a 1-D if mono or 2-D if stereo ndarray
-    """
-    audio, current_sr = librosa.load(path, sr=None, mono=to_mono) 
-    if current_sr != sr:
-        audio = librosa.resample(audio, orig_sr=current_sr, target_sr=sr)
-    logger.light_debug(f"Loaded audio form {path} of dimensions: {audio.shape}, sr: {sr}")
-    return audio
+    def audio_splits_to_mel_spectrograms(self, len_fft: int = 1023, hop_length: int = 256, min_freq: int = 30, max_freq: int = 16000, n_mels: int = 128, log: bool = True) -> ndarray:
+        if self.chunks is None:
+            raise ValueError("No audio chunks to convert. Split audio first.")
+        logger.debug("Started Mel-Spec on splits")
+        specs = []
+        for i, split in enumerate(self.chunks):
+            spec = librosa.feature.melspectrogram(y=split, n_fft=len_fft, hop_length=hop_length, sr=self.sr, fmin=min_freq, fmax = max_freq, n_mels=n_mels)
+            if log:
+                spec = np.log(spec + 1e-6)
+            specs.append(spec)
+            if (i + 1) % 10 == 0 and logger.getEffectiveLevel() == LIGHT_DEBUG:
+                print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - lIGHT DEBUG - Processed Splits: {i + 1}", end='')
+        if logger.getEffectiveLevel() == 10:
+            print()
+        specs = np.array(specs)
+        self.spec_chunks = specs
+        self.metadata["shape"] = specs.shape
+        logger.debug(f"Created mel-spectrograms of splits: {specs.shape}")
+        return specs
+    
+    def audio_to_mel_spectrogram(self, len_fft: int = 1023, hop_length: int = 256, min_freq: int = 30, max_freq: int = 16000, n_mels: int = 128, log: bool = True) -> ndarray:
+        if self.data is None:
+            raise ValueError("No audio data to convert. Load data first.")
+        logger.debug("Started Mel-Spec")
+        spec = librosa.feature.melspectrogram(y=self.data, n_fft=len_fft, hop_length=hop_length, sr=self.sr, fmin=min_freq, fmax=max_freq, n_mels=n_mels)
+        if log:
+            spec = np.log(spec + 1e-6)
+        self.spec_data = spec
+        self.metadata["shape"] = spec.shape
+        logger.debug(f"Created mel-spectrogram: {spec.shape}")
+        return spec
+    
+    def mel_spectrogram_to_audio(self, len_fft: int = 1023, hop_length: int = 256, min_freq: int = 30, max_freq: int = 16000, log: bool = True) -> ndarray:
+        if self.spec_data is None:
+            raise ValueError("No spectrogram data to convert. Load or create spectrogram first.")
+        logger.debug("Started GL")
+        spec = self.spec_data
+        if log:
+            spec = np.exp(spec)
+        audio = librosa.feature.inverse.mel_to_audio(spec, sr=self.sr, n_fft=len_fft, hop_length=hop_length, fmin=min_freq, fmax=max_freq)
+        audio = self.normalize(audio, -0.99999, 0.99999)
+        self.data = audio
+        self.metadata["shape"] = audio.shape
+        logger.debug(f"Reconstructed audio: {audio.shape}")
+        return audio
+    
+    def normalize(data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
+        min_data: float = np.min(data)
+        max_data: float = np.max(data)
+        scaled_data: ndarray = (data - min_data) / (max_data - min_data)
+        normalized_data: ndarray = scaled_data * (max_val - min_val) + min_val
+        logger.light_debug(f"Normalized to range: [{min_val},{max_val}]")
+        return normalized_data
 
-def load_spectrogram(path: str) -> ndarray:
-    """Loads a spectrogram to np array.
+    def normalize_filewise(self, data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
+        normalized_data: ndarray = np.zeros_like(data)
+        for i, file in enumerate(data):
+            min_file: float = np.min(file)
+            max_file: float = np.max(file)
+            scaled_file: ndarray = (file - min_file) / (max_file - min_file)
+            normalized_file: ndarray = scaled_file * (max_val - min_val) + min_val
+            normalized_data[i] = normalized_file
+        logger.light_debug(f"Normalized to range: [{min_val},{max_val}]")
+        return normalized_data
+    
+    def __repr__(self) -> str:
+        base = f"AudioData(sr={self.sr} Hz)"
+        details = []
+        
+        if self.data is not None:
+            shape = self.metadata.get("shape", self.data.shape if hasattr(self.data, "shape") else "N/A")
+            details.append(f"audio_data(shape={shape})")
+        
+        if self.spec_data is not None:
+            shape = self.metadata.get("spectogram", {}).get("shape", self.spec_data.shape if hasattr(self.spec_data, "shape") else "N/A")
+            details.append(f"spectrogram_data(shape={shape})")
+        
+        if self.chunks is not None:
+            n_chunks = self.metadata.get("n_chunks", len(self.chunks) if hasattr(self.chunks, "__len__") else "N/A")
+            len_chunk = self.metadata.get("len_chunk", "N/A")
+            details.append(f"audio_chunks(n_chunks={n_chunks}, len_chunk={len_chunk}s)")
+        
+        if self.spec_chunks is not None:
+            shape = self.metadata.get("shape", self.spec_chunks.shape if hasattr(self.spec_chunks, "shape") else "N/A")
+            details.append(f"spectrogram_chunks(shape={shape})")
+        
+        if not details:
+            return f"{base}: No data loaded"
+        
+        return f"{base}: {', '.join(details)}"
 
-    Args:
-        path (str): Path to spectrogram.
+class NPData():
+    def __init__(self, data: (ndarray | None) = None) -> None:
+        self.data = data
+    def save_training_data(self, path: str, data: (ndarray | None) = None) -> None:
+        if data is None and self.data is None:
+            raise ValueError("No data to save")
+        data = data if data else self.data
+        if not path.endswith(".npy"):
+            path += ".npy"
+        np.save(path, data)
+        logger.light_debug(f"Saved ndarray to:{path}")
 
-    Returns:
-        ndarray: _description_
-    """
-    spectrogram: ndarray = np.load(path)["stft"]
-    logger.light_debug(f"spectrogram loaded from {path} of shape: {spectrogram.shape}")
-    return spectrogram
+    def load_training_data(self, path: str) -> ndarray:
+        if not path.endswith(".npy"):
+            path += ".npy"
+        self.data: ndarray= np.load(path)
+        logger.light_debug(f"Ndarray loaded from {path} of shape: {self.data.shape}")
+        return self.data
 
-def save_spectrogram(spectrogram: ndarray, path: str) -> None:
-    """Saves spectrogram to path.
+class OS():
+    def __init__(self) -> None:
+        pass
+    def get_filenames_from_folder(self, path: str, filetype: str = None) -> list:
+        if filetype != None:
+            files: list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f)) and f.endswith(filetype)]
+        else:
+            files: list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+        logger.light_debug(f"Got filenames {files} from {path}")
+        return files
+    
+    def path_to_remote_path(self, path: str, is_remote: bool = False) -> bool:
+        if is_remote: return path[3:]
+        else: return path
+    
+    def del_if_exists(self, path: str) -> None:
+        if os.path.exists(path):
+            os.remove(path)
+            logger.light_debug(f"{path} deleted")
+        else:
+            logger.light_debug(f"{path} could not be deleted")
 
-    Args:
-        spectrogram (ndarray): A spectrogram.
-        path (str): Path to save to.
-    """
-    np.savez_compressed(path, stft=spectrogram)
-    logger.light_debug(f"Saved spectrogram to:{path}")
+class ModelData():
+    def __init__(self, dataset: (Dataset | None) = None, data: (ndarray | None) = None, labels: (ndarray | None) = None) -> None:
+        self.data = data
+        self.labels = labels
+        self.val_data, self.val_labels = None, None
+        self.train_data, self.train_labels = None, None
+        self.train_dataset, self.val_dataset = dataset, None
+    
+    def load_data_from_path(self, data_path: str, label_path: (str | None) = None, shuffle: bool = True, random_seed: int = 567) -> None:
+        data = NPData().load_training_data(data_path)
+        labels = NPData().load_training_data(label_path) if label_path else None
+        if shuffle == True:
+            np.random.seed(random_seed)
+            indicies: ndarray = np.arange(data.shape[0])
+            np.random.shuffle(indicies)
+            self.data = data[indicies]
+            self.labels = labels[indicies] if labels else self.data
+        else:
+            self.data = data
+            self.labels = labels if labels else data
 
-def save_training_data(data: ndarray, path: str) -> None:
-    """Saves numpy array to path.
+    def load_data(self, data: ndarray, labels: (ndarray | None) = None, shuffle: bool = True, random_seed: int = 567) -> None:
+        if shuffle == True:
+            np.random.seed(random_seed)
+            indicies: ndarray = np.arange(data.shape[0])
+            np.random.shuffle(indicies)
+            self.data = data[indicies]
+            self.labels = labels[indicies] if labels else self.data
+        else:
+            self.data = data
+            self.labels = labels if labels else data
+    
+    def create_validation_split(self, n_data_samples: (int | None) = None) -> None:
+        n_samples = len(self.data)
+        if n_data_samples is not None and int(n_data_samples * 0.05) + n_data_samples <= n_samples:
+            n_validation_samples = int(n_data_samples * 0.05)
+        else:
+            n_data_samples = n_samples
+            n_validation_samples = int(n_data_samples * 0.05)
+            n_data_samples -= n_validation_samples
+        indicies: ndarray = np.arange(self.data.shape[0])
+        val_indicies = np.random.choice(indicies, replace = False)
+        data, labels = self.data, self.labels
+        self.val_data, self.val_labels = data[val_indicies], labels[val_indicies]
+        data, labels = np.delete(data, val_indicies), np.delete(labels, val_indicies)
+        self.train_data, self.train_labels = data, labels
+        
+    def create_datasets(self, data_type: torch.dtype = torch.float32) -> tuple[Dataset, (Dataset | None)]:
+        self.train_dataset = AudioDataset(self.train_data, self.train_labels, data_type)
+        self.val_dataset = AudioDataset(self.val_dataset, self.val_dataset, data_type) if self.val_dataset else None
+        return self.train_dataset, self.val_dataset
 
-    Args:
-        data (ndarray): Numpy array.
-        path (str): Filepath.
-    """
-    if not path.endswith(".npy"):
-        path += ".npy"
-    np.save(path, data)
-    logger.light_debug(f"Saved ndarray to:{path}")
+    def create_dataloaders(self, batch_size: int, shuffle: bool = False, num_workers: int = 1) -> tuple[DataLoader, (DataLoader | None)]:
+        if self.train_dataset is None:
+            raise ValueError("No train dataset defined")
+        self.train_dataloader = DataLoader(dataset=self.train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+        self.val_dataloader = DataLoader(dataset=self.val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers) if self.val_data else None
+        return self.train_dataloader, self.val_dataloader
 
-def load_training_data(path: str) -> ndarray:
-    """Loads an numpy array from path.
-
-    Args:
-        path (str): Filepath.
-
-    Returns:
-        ndarray: The loaded data.
-    """
-    if not path.endswith(".npy"):
-        path += ".npy"
-    data: ndarray= np.load(path)
-    logger.light_debug(f"Ndarray loaded from {path} of shape: {data.shape}")
-    return data
-
-def save_audio_file(audio: ndarray, path: str, sr: int = 44100) -> None:
-    """Saves an numpy array as audiofile, normalizes the audio if needed.
-    Args:
-        audio (ndarray): Audio data, 1-D or 2-D array.
-        path (str): Filepath has to end with the filetype e.g. .wav.
-        sr (int, optional): Samplerate of the audio. Defaults to 44100.
-    """
-    if audio.dtype != np.int16:
-        audio = normalize(audio, -0.99999, 0.99999)
-    soundfile.write(path, audio, sr)
-    logger.light_debug(f"Saved file to:{path}")
-
-def get_filenames_from_folder(path: str, filetype: str = None) -> list:
-    """Fetches all filenames froma given folder, if filetype is speciefied only filenames of that type are returned.
-
-    Args:
-        path (str): Folderpath.
-        filetype (str, optional): If passed, filters folder for this filetype e.g. .wav. Defaults to None.
-
-    Returns:
-        list: Returns a list of found filenames.
-    """
-    if filetype != None:
-        files: list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f)) and f.endswith(filetype)]
-    else:
-        files: list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
-    logger.light_debug(f"Got filenames {files} from {path}")
-    return files
-
-def path_to_remote_path(path: str, is_remote: bool = True) -> str:
-    """If is_remote = True removes the ../ from the path to fit the remote kernel structure.
-
-    Args:
-        path (str): File or folderpath.
-        is_remote (bool, optional): True if working on a remote kernel. Defaults to True.
-
-    Returns:
-        str: Modified filepath.
-    """
-    if is_remote:
-        return path[3:]
-    else: return path
-
-def del_if_exists(path: str) -> None:
-    """Deletes a file or directory if it exists, given its path.
-
-    Args:
-        path (str): filepath.
-    """
-    if os.path.exists(path):
-        os.remove(path)
-        logger.light_debug(f"{path} deleted")
-    else:
-        logger.light_debug(f"{path} could not be deleted")
-
-# Other Manipulations
-def split_audiofile(audio: ndarray, time: float, sr: int = 44100, overlap_s: float = 0) -> ndarray:
-    """Splits audio into samples of length time, with an optional overlap. Pads the last file with zeroes if necessary.
-
-    Args:
-        audio (ndarray): Audiofile.
-        time (float): Sample length in s.
-        sr (int, optional): Sample rate. Defaults to 44100.
-        overlap_s (float, optional): Overlap of the samples in s. Defaults to 0.
-
-    Returns:
-        ndarray: Nd-array containing the audiosplits.
-    """
-    samples: int = int(sr * time)
-    samples_overlap: int = int(sr * overlap_s)
-    if overlap_s == 0:
-        pad: int = len(audio) % samples
-        audio = np.pad(audio, (0, samples - pad))
-        data = np.array(np.split(audio, len(audio) // samples))
-    else:
-        data: list = []
-        for i in range(0, audio.shape[0] - samples + 1, samples - samples_overlap):
-            split: ndarray = audio[i: i + samples]
-            if split.shape[0] != samples:
-                split = np.pad(split, (0, samples - split.shape[0]))
-            data.append(split)
-        data = np.array(data)
-
-    logger.light_debug(f"Split audio to: {data.shape}")
-    return data
+class AudioDataset(Dataset):
+    def __init__(self, data: (ndarray | Tensor), labels: (ndarray | Tensor | None) = None, dt: torch.dtype = torch.float32) -> None:
+        if type(data) is not  Tensor:
+            data: Tensor = torch.tensor(data)
+        if type(labels) is not Tensor and labels is not None:
+            labels: Tensor = torch.tensor(labels)
+        if labels is not None:
+            self.labels = labels.to(dtype=dt) 
+        else:
+            self.labels = data.to(dtype=dt) 
+        self.data = data.to(dtype=dt)
+    def __len__(self):
+        return len(self.data)
+    def __getitem__(self, idx):
+        return self.data[idx], self.labels[idx]
 
 def midi2ndarray(path: str, sr: int = 32000, sf_path: str = "UprightPiano.sf2") -> ndarray:
     fs = FluidSynth(sf_path, sample_rate=sr)
@@ -189,299 +355,6 @@ def midi2ndarray(path: str, sr: int = 32000, sf_path: str = "UprightPiano.sf2") 
         audio, _ = soundfile.read(temp_wav.name)
         os.unlink(temp_wav.name)
     return audio
-
-def patch_safe_audio(audio_lst: ndarray, path: str, sr: int = 32000) -> None:
-    audio = np.concatenate(audio_lst)
-    save_audio_file(audio, path, sr)
-
-def create_dataloader(data: Dataset, batch_size: int, shuffle: bool = False, num_workers: int = 1) -> DataLoader:
-    """Creates a torch dataloader. Optionally shuffles the data.
-
-    Args:
-        data (Dataset): The dataloader data.
-        batch_size (int): Batch size.
-        shuffle (bool, optional): If true schuffles data. Defaults to False.
-        num_workers(int, optional): Sets number of workers. Defaults to 1.
-
-    Returns:
-        DataLoader: The torch Dataloader.
-    """
-    return DataLoader(dataset=data, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
-
-# spectrograms
-def audio_to_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
-    """Converts audio to stft spectrograms and optionally converts the spectrograms to log scale.
-
-    Args:
-        audio (ndarray): Audio data._
-        len_fft (int, optional): STFT FFT length. Defaults to 4096.
-        hop_length (int, optional): STFT hop length. Defaults to 512.
-        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
-
-    Returns:
-        ndarray: An stft spectrogram.
-    """
-    logger.light_debug("Started STFT")
-    stft = librosa.stft(audio, n_fft=len_fft, hop_length=hop_length)
-    spec = np.abs(stft)
-    if log:
-        spec = np.log(spec + 1e-6)
-    logger.light_debug(f"Created spectrogram: {spec.shape}")
-    return spec
-
-def audio_splits_to_spectrograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
-    """Converts a numpy array containing multiple samples to stft spectrograms and optionally converts the spectrograms to log scale.
-
-    Args:
-        audio (ndarray): Audio data._
-        len_fft (int, optional): STFT FFT length. Defaults to 4096.
-        hop_length (int, optional): STFT hop length. Defaults to 512.
-        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
-
-    Returns:
-        ndarray: An numpy array containing the stft spectrograms.
-    """
-    logger.light_debug("Started STFT on splits")
-    specs: list = []
-    for i,split in enumerate(audio):
-        stft = librosa.stft(split, n_fft=len_fft, hop_length=hop_length)
-        spec = np.abs(stft)
-        if log:
-            spec = np.log(spec + 1e-6)
-        specs.append(spec)
-        if (i + 1) % 10 == 0 and logger.getEffectiveLevel() == LIGHT_DEBUG:
-            print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Processed Splits: {i + 1}", end='')
-    if logger.getEffectiveLevel() == LIGHT_DEBUG:
-        print()
-    specs: ndarray = np.array(specs)
-    logger.light_debug(f"Created spectrograms of splits: {specs.shape}")
-    return specs
-
-def spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, log: bool = True) -> ndarray:
-    """Uses Griffinlim to convert a spectrogram to audio.
-
-    Args:
-        spec (ndarray): An STFT spectrogram.
-        len_fft (int, optional): STFT FFT length. Defaults to 4096.
-        hop_length (int, optional): STFT hop length. Defaults to 512.
-        log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
-
-    Returns:
-        ndarray: An audio file
-    """
-    logger.light_debug("Started GL")
-    if spec.shape[0] != len_fft // 2 + 1:
-        spec = np.pad(spec, ((0, abs((len_fft // 2 + 1) - spec.shape[0])), (0, 0)), mode='constant')
-    if log:
-        spec = np.exp(spec)
-    audio: ndarray = librosa.griffinlim(spec, n_fft=len_fft, hop_length=hop_length)
-    audio = normalize(audio, -0.99999, 0.99999)
-    logger.light_debug(f"Reconstructed audio: {audio.shape}")
-    return audio
-
-def normalize(data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
-    """Maps data to a given range.
-
-    Args:
-        data (ndarray): Data.
-        min_val (float, optional): Min value. Defaults to 0.
-        max_val (float, optional): Max value. Defaults to 1.
-
-    Returns:
-        ndarray: Mapped data.
-    """
-    min_data: float = np.min(data)
-    max_data: float = np.max(data)
-    scaled_data: ndarray = (data - min_data) / (max_data - min_data)
-    normalized_data: ndarray = scaled_data * (max_val - min_val) + min_val
-    logger.light_debug(f"Normalized to range: [{min_val},{max_val}]")
-    return normalized_data
-
-def normalize_filewise(data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
-    """Normalizes an array containg the data as sub arays, sub array wise. E.g. when taken from audiosplits it normalizes each split to the range given. 
-
-    Args:
-        data (ndarray): Data
-        min_val (float, optional): Min value. Defaults to -1.
-        max_val (float, optional): Max value. Defaults to 1.
-
-    Returns:
-        ndarray: Filenormalized array.
-    """
-    normalized_data: ndarray = np.zeros_like(data)
-    for i, file in enumerate(data):
-        min_file: float = np.min(file)
-        max_file: float = np.max(file)
-        scaled_file: ndarray = (file - min_file) / (max_file - min_file)
-        normalized_file: ndarray = scaled_file * (max_val - min_val) + min_val
-        normalized_data[i] = normalized_file
-    logger.light_debug(f"Normalized to range: [{min_val},{max_val}]")
-    return normalized_data
-
-def unnormalize(data: ndarray, min_val: float = -50, max_val: float = 50) -> ndarray:
-    """Convenience function, does the same as normalize but is set to unnormalize to spectrogram range.
-
-    Args:
-        data (ndarray): Data.
-        min_val (float, optional): Min value. Defaults to -50.
-        max_val (float, optional): Max value. Defaults to 50.
-
-    Returns:
-        ndarray: Mapped data.
-    """
-    min_data: float = np.min(data)
-    max_data: float = np.max(data)
-    scaled_data: ndarray = (data - min_data) / (max_data - min_data)
-    normalized_data: ndarray = scaled_data * (max_val - min_val) + min_val
-    logger.light_debug(f"Unnormalized to range: [{min_val},{max_val}]")
-    return normalized_data
-
-def dimension_for_VAE(data: ndarray) -> ndarray:
-    """Dimensions data for easier use. Crops data to be of a size divisible by 32.
-
-    Args:
-        data (ndarray): Data.
-
-    Returns:
-        ndarray: Cropped data. 
-    """
-    if data.shape[-1] % 32 != 0:
-        data = data[...,:(data.shape[-1] // 32) * 32]
-    if data.shape[-2] % 32 != 0:
-        data = data[...,:(data.shape[-2] // 32) * 32, :]
-    return data
-
-def audio_to_mel_spectrogram(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
-    """Creates a mel spectrogram from an audio file.
-
-    Args:
-        audio (ndarray): Audio data.
-        len_fft (int, optional): STFT FFT length. Defaults to 4096.
-        hop_length (int, optional): STFT hop length. Defaults to 512.
-        sr (int, optional): Sample rate. Defaults to 44100.
-        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
-        min_freq (int, optional): Sets the minimal frequency represented by spectrogram. Defaults to 30.
-        n_mels (int, optional): Number of mel bins. Defaults to 128.
-
-    Returns:
-        ndarray: Mel spectrogram.
-    """
-    logger.light_debug("Started Mel-Spec")
-    spec = librosa.feature.melspectrogram(y=audio, n_fft=len_fft, hop_length=hop_length, sr=sr, fmin=min_freq, n_mels=n_mels)
-    if log:
-        spec = np.log(spec + 1e-6)
-    logger.light_debug(f"Created mel-spectrogram: {spec.shape}")
-    return spec
-
-def audio_splits_to_mel_spectrograms(audio: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True, min_freq: int = 30, n_mels: int = 128) -> ndarray:
-    """Creates mel spectrograms from audio samples.
-
-    Args:
-        audio (ndarray): Audio samples.
-        len_fft (int, optional): STFT FFT length. Defaults to 4096.
-        hop_length (int, optional): STFT hop length. Defaults to 512.
-        sr (int, optional): Sample rate. Defaults to 44100.
-        log (bool, optional): If true converts spectrogram to log scale. Defaults to True.
-        min_freq (int, optional): Sets the minimal frequency represented by spectrogram. Defaults to 30.
-        n_mels (int, optional): Number of mel bins. Defaults to 128.
-
-    Returns:
-        ndarray: Mel spectrograms.
-    """
-    logger.light_debug("Started Mel-Spec on splits")
-    specs: list = []
-    for i,split in enumerate(audio):
-        spec = librosa.feature.melspectrogram(y=split, n_fft=len_fft, hop_length=hop_length, sr=sr, fmin=min_freq, n_mels=n_mels)
-        if log:
-            spec = np.log(spec + 1e-6)
-        specs.append(spec)
-        if (i + 1) % 10 == 0 and logger.getEffectiveLevel() == LIGHT_DEBUG:
-            print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Processed Splits: {i + 1}", end='')
-    if logger.getEffectiveLevel() == LIGHT_DEBUG:
-        print()
-    specs: ndarray = np.array(specs)
-    logger.light_debug(f"Created Mel-spectrograms of splits: {specs.shape}")
-    return specs
-
-def mel_spectrogram_to_audio(spec: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True) -> ndarray:
-    """Uses Griffinlim to convert a mel-spectrogram to audio.
-
-    Args:
-        spec (ndarray): An STFT spectrogram.
-        len_fft (int, optional): STFT FFT length. Defaults to 4096.
-        hop_length (int, optional): STFT hop length. Defaults to 512.
-        sr (int, optional): Sample rate. Defaults to 44100.
-        log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
-
-    Returns:
-        ndarray: An audio file
-    """
-    logger.light_debug("Started GL")
-    if log:
-        spec = np.exp(spec)
-    audio: ndarray = librosa.feature.inverse.mel_to_audio(spec, sr=sr, n_fft=len_fft, hop_length=hop_length)
-    audio = normalize(audio, -0.99999, 0.99999)
-    logger.light_debug(f"Reconstructed audio: {audio.shape}")
-    return audio
-
-def sdr(audio: ndarray, sr: int = 44100, cutoff: int = 4000) -> float:
-    """
-    Approximate SDR without a reference by comparing audio to a low-pass filtered version.
-    
-    Args:
-        audio (np.ndarray): Generated waveform.
-        sr (int): Sampling rate in Hz.
-        cutoff (float): Cutoff frequency for low-pass filter (Hz).
-    
-    Returns:
-        float: SDR in dB.
-    """
-    nyquist = sr / 2
-    normal_cutoff = cutoff / nyquist
-    b, a = butter(4, normal_cutoff, btype='low', analog=False)
-    
-    smoothed_audio = lfilter(b, a, audio)
-    
-    signal_power = np.mean(np.square(smoothed_audio))
-
-    distortion = audio - smoothed_audio
-    distortion_power = np.mean(np.square(distortion))
-    
-    if distortion_power == 0:
-        return float('inf')
-    
-    sdr = 10 * np.log10(signal_power / distortion_power)
-    logger.light_debug("Calculated SDR")
-    return sdr
-
-def spectral_convergence(spectrogram: ndarray, len_fft: int = 4096, hop_length: int = 512, sr: int = 44100, log: bool = True) -> float:
-    """Measure spectral convergence of a generated spectrogram.
-
-    Args:
-        spectrogram (ndarray): spectrogram.
-        len_fft (int, optional): STFT FFT length. Defaults to 1024.
-        hop_length (int, optional): STFT hop length. Defaults to 512.
-        sr (int, optional): Samplerate. Defaults to 44100.
-        log (bool, optional): Set to true if spectrogram is in log scale. Defaults to True.
-
-    Returns:
-        float: Spectral convergence score.
-    """
-    audio = spectrogram_to_audio(spectrogram, len_fft, hop_length, log)
-    
-    # Recompute STFT from the waveform
-    reconstructed_spec = np.abs(librosa.stft(audio, n_fft=len_fft, hop_length=hop_length))
-    
-    # Pad or trim to match original shape (224x416)
-    reconstructed_spec = reconstructed_spec[:spectrogram.shape[-2], :spectrogram.shape[-1]]
-    
-    diff = np.mean((spectrogram - reconstructed_spec) ** 2)
-    norm = np.mean(spectrogram ** 2)
-
-    if norm == 0:
-        return float('inf')
-    
-    return np.sqrt(diff / norm)
 
 def flatten(data: ndarray) -> ndarray:
     """Flattens a 3D (N,H,W) to 2d (N,H*W).
@@ -551,31 +424,8 @@ def count_parameters(model: nn.Module) -> str:
         if n / key > 1:
             n = round(n / key, 3)
             return f"~{str(n)[:5]}{val}"
-class Audio_Data(Dataset):
-    def __init__(self, data: ndarray, labels: ndarray = None, dt: torch.dtype = torch.float32) -> None:
-        """Creates a torch dataloader. 
 
-        Args:
-            data (ndarray): Data.
-            labels (ndarray, optional): If labels are not given labels are set to be the data. Defaults to None.
-            dtype (torch.dtype, optional): Datatype. Defaults to torch.float32.
-        """
-        if type(data) is not  Tensor:
-            data: Tensor = torch.tensor(data)
-        if type(labels) is not Tensor and labels is not None:
-            labels: Tensor = torch.tensor(labels)
-        
-        if labels is not None:
-            self.labels = labels.to(dtype=dt) 
-        else:
-            self.labels = data.to(dtype=dt) 
-        self.data = data.to(dtype=dt)
-    def __len__(self):
-        return len(self.data)
-    def __getitem__(self, idx):
-        return self.data[idx], self.labels[idx]
-    
-class Trainer():
+class DiffusionTrainer():
     def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu", embed_fun: Callable | None = None, embed_dim: int | None = None, n_dims: int = 1)-> None:
         self.model = model
         self.optimizer = optimizer
@@ -689,7 +539,7 @@ class Trainer():
                     torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
                     if e + 1 != checkpoint_freq:
                         last_path: str = f"{full_model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
-                        del_if_exists(last_path)
+                        OS().del_if_exists(last_path)
                     logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
                 continue
             break
@@ -701,7 +551,7 @@ class Trainer():
 
         if checkpoint_freq > 0:
             checkpoint_path: str = f"{full_model_path[:-4]}_epoch_{e + 1 - ((e + 1) % checkpoint_freq):03d}.pth"
-            del_if_exists(checkpoint_path)
+            OS().del_if_exists(checkpoint_path)
         
         return loss_list, val_loss_list
     
@@ -725,7 +575,7 @@ class Trainer():
             noise = torch.randn(n_samples, tensor_dim[-2], tensor_dim[-1]).to(self.device)
         self.model.eval()
         samples = self._convert_to_item_list(self.model.sample(noise, num_steps=n_steps))
-        samples = normalize(samples, -1, 1)
+        samples = AudioData().normalize(samples, -1, 1)
         self.model.train()
         if visualize:
             self.visualize_samples(samples)
@@ -752,33 +602,11 @@ class Trainer():
 
     def visualize_samples(self, samples: ndarray) -> None:
         for sample in samples:
-            visualize_spectrogram(normalize(sample, -1, 1), sr=32000)
+            visualize_spectrogram(OS().normalize(sample, -1, 1), sr=32000)
     
     def save_samples(self, samples: ndarray, file_path_name: str, sr: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
         for i, sample in enumerate(samples):
-            audio = spectrogram_to_audio(unnormalize(sample), len_fft, len_hop)
-            save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sr=sr)
+            audio = AudioData().spectrogram_to_audio(OS().normalize(sample, -50, 50), len_fft, len_hop)
+            AudioData().save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sr=sr)
     
-    def get_audio_metrics(self, samples: ndarray, original_dataset: ndarray = None, sr: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
-        avg_sample_spectral_conv: float = 0
-        avg_sample_spectral_cent: float = 0
-        avg_true_spectral_conv: float = 0
-        avg_true_spectral_cent: float = 0
-        for sample in samples:
-            avg_sample_spectral_conv += spectral_convergence(sample, sr=sr, len_fft=len_fft, hop_length=len_hop)
-            avg_sample_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sr))
 
-        if original_dataset is not None:
-            indices: list = np.random.choice(len(original_dataset), 100)
-            for idx in indices:
-                sample = original_dataset[idx]
-                avg_true_spectral_conv += spectral_convergence(sample, sr=sr, len_fft=len_fft, hop_length=len_hop)
-                avg_true_spectral_cent += np.mean(librosa.feature.spectral_centroid(y=sample, sr=sr))
-
-        n = len(samples)
-        avg_sample_spectral_conv = avg_sample_spectral_conv / n
-        avg_sample_spectral_cent = avg_sample_spectral_cent / n
-        avg_true_spectral_conv = avg_true_spectral_conv / 100
-        avg_true_spectral_cent = avg_true_spectral_cent / 100
-        metrics_str: str = f"Spectral Convergence Samples/Real: {avg_sample_spectral_conv:.3f}, {avg_true_spectral_conv:.3f} Spectral Centroid Samples/Real: {avg_sample_spectral_cent:.3f} Hz, {avg_true_spectral_cent:.3f} Hz" if original_dataset is not None else f"Spectral Convergence Samples: {avg_sample_spectral_conv:.3f} Spectral Centroid Samples: {avg_sample_spectral_cent:.3f} Hz"
-        print(metrics_str)
