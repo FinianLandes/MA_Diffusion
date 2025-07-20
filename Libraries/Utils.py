@@ -11,7 +11,6 @@ import numpy as np
 from numpy import ndarray
 import matplotlib.pyplot as plt
 import librosa, os, logging, time, soundfile, tempfile
-from midi2audio import FluidSynth
 from typing import Callable, Optional
 #Logging
 LIGHT_DEBUG: int = 15
@@ -44,18 +43,21 @@ class AudioData():
         logger.light_debug(f"Loaded audio from {path} of dimensions: {audio.shape}, sr: {self.sr}")
         return audio
     
-    def save_audio_file(self, path: str, normalize: bool = True):
+    def save_audio_file(self, path: str, norm: bool = True):
         if self.data is None:
             raise ValueError("No audio data to save. Load data first.")
-        if not path.endswith([".wav", ".mp3", ".flac"]):
+        if not path.endswith((".wav", ".mp3", ".flac")):
             path += ".wav"
         audio = self.data
-        if normalize and audio.dtype != np.int16:
+        if norm and audio.dtype != np.int16:
             audio = self.normalize(audio, -0.99999, 0.99999)
         soundfile.write(path, audio, self.sr)
         logger.light_debug(f"Saved audio to: {path}")
     
-    def split_audiofile(self, length: float, overlap_s: float = 0, normalize: bool = True) -> ndarray:
+    def split_audiofile(self, length: float, overlap_s: float = 0, norm: bool = True) -> ndarray:
+        if self.data is None:
+            raise ValueError("Data missing you need to load an audiofile first")
+        audio = self.data
         samples: int = int(self.sr * length)
         samples_overlap: int = int(self.sr * overlap_s)
         if overlap_s == 0:
@@ -70,7 +72,7 @@ class AudioData():
                     split = np.pad(split, (0, samples - split.shape[0]))
                 data.append(split)
             data = np.array(data)
-        if normalize:
+        if norm:
             data = self.normalize_filewise(data)
         self.chunks = data
         self.metadata["n_chunks"] = len(data)
@@ -186,7 +188,7 @@ class AudioData():
         logger.debug(f"Reconstructed audio: {audio.shape}")
         return audio
     
-    def normalize(data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
+    def normalize(self, data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
         min_data: float = np.min(data)
         max_data: float = np.max(data)
         scaled_data: ndarray = (data - min_data) / (max_data - min_data)
@@ -313,48 +315,39 @@ class ModelData():
             n_validation_samples = int(n_data_samples * 0.05)
             n_data_samples -= n_validation_samples
         indicies: ndarray = np.arange(self.data.shape[0])
-        val_indicies = np.random.choice(indicies, replace = False)
+        val_indicies = np.random.choice(indicies, size=n_validation_samples, replace = False)
         data, labels = self.data, self.labels
         self.val_data, self.val_labels = data[val_indicies], labels[val_indicies]
-        data, labels = np.delete(data, val_indicies), np.delete(labels, val_indicies)
-        self.train_data, self.train_labels = data, labels
+        self.train_data, self.train_labels = np.delete(data, val_indicies, axis=0)[:n_data_samples], np.delete(labels, val_indicies, axis=0)[:n_data_samples]
         
     def create_datasets(self, data_type: torch.dtype = torch.float32) -> tuple[Dataset, (Dataset | None)]:
-        self.train_dataset = AudioDataset(self.train_data, self.train_labels, data_type)
-        self.val_dataset = AudioDataset(self.val_dataset, self.val_dataset, data_type) if self.val_dataset else None
+        self.train_dataset = AudioDataset(self.train_data, self.train_labels, data_type=data_type)
+        self.val_dataset = AudioDataset(self.val_data, self.val_labels, data_type=data_type) if self.val_data is not None else None
         return self.train_dataset, self.val_dataset
 
     def create_dataloaders(self, batch_size: int, shuffle: bool = False, num_workers: int = 1) -> tuple[DataLoader, (DataLoader | None)]:
         if self.train_dataset is None:
             raise ValueError("No train dataset defined")
         self.train_dataloader = DataLoader(dataset=self.train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
-        self.val_dataloader = DataLoader(dataset=self.val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers) if self.val_data else None
+        self.val_dataloader = DataLoader(dataset=self.val_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers) if self.val_dataset else None
         return self.train_dataloader, self.val_dataloader
 
 class AudioDataset(Dataset):
-    def __init__(self, data: (ndarray | Tensor), labels: (ndarray | Tensor | None) = None, dt: torch.dtype = torch.float32) -> None:
+    def __init__(self, data: (ndarray | Tensor), labels: (ndarray | Tensor | None) = None, data_type: torch.dtype = torch.float32) -> None:
         if type(data) is not  Tensor:
             data: Tensor = torch.tensor(data)
         if type(labels) is not Tensor and labels is not None:
             labels: Tensor = torch.tensor(labels)
         if labels is not None:
-            self.labels = labels.to(dtype=dt) 
+            self.labels = labels.to(dtype=data_type) 
         else:
-            self.labels = data.to(dtype=dt) 
-        self.data = data.to(dtype=dt)
+            self.labels = data.to(dtype=data_type) 
+        self.data = data.to(dtype=data_type)
     def __len__(self):
         return len(self.data)
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
 
-def midi2ndarray(path: str, sr: int = 32000, sf_path: str = "UprightPiano.sf2") -> ndarray:
-    fs = FluidSynth(sf_path, sample_rate=sr)
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
-        fs.midi_to_audio(path, temp_wav.name)
-        print("Converted")
-        audio, _ = soundfile.read(temp_wav.name)
-        os.unlink(temp_wav.name)
-    return audio
 
 def flatten(data: ndarray) -> ndarray:
     """Flattens a 3D (N,H,W) to 2d (N,H*W).
@@ -424,6 +417,17 @@ def count_parameters(model: nn.Module) -> str:
         if n / key > 1:
             n = round(n / key, 3)
             return f"~{str(n)[:5]}{val}"
+
+def generate_latent_repr(vq_vae: nn.Module, data: Dataset, batch_size: int = 24, device: str = "cpu") -> Dataset:
+    data_loader = DataLoader(data, batch_size=batch_size)
+    converted_data = []
+    vq_vae.eval()
+    for b,_ in (data_loader):
+        _, q_z, _, _ = vq_vae(b.unsqueeze(1).to(device))
+        converted_data.append(q_z)
+    vq_vae.train()
+    new_data = torch.cat(converted_data, dim=0)
+    return AudioDataset(new_data, data_type=torch.long)
 
 class DiffusionTrainer():
     def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu", embed_fun: Callable | None = None, embed_dim: int | None = None, n_dims: int = 1)-> None:
