@@ -278,16 +278,19 @@ class VQVAE(nn.Module):
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor, dict]:
         z = self.encoder(x)
-        z_q, z_quantized, commit_loss, metrics = self.bottleneck(z)
+        z_indicies, z_quantized, commit_loss, metrics = self.bottleneck(z)
         x_recon = self.decoder([z_quantized], all_levels=False)
-        return x_recon, z_q, commit_loss, metrics
+        return x_recon, z_indicies, commit_loss, metrics
     
     def decode(self, x: (Tensor | list)) -> Tensor:
         x_l = x if isinstance(x, Tensor) else x[0]
         z_dq = self.bottleneck.dequantise(x_l) 
-        N = x_l.shape[0]
-        T = x_l.shape[1]
+        N, T = x_l.shape[0], x_l.shape[1]
         _, z_dq = self.bottleneck.postprocess(None, z_dq, N, T)
-        z_dq = z_dq + (z_dq - z_dq.detach())
         audio = self.decoder([z_dq], all_levels=False)
         return audio
+    
+    def encode(self, x: Tensor) -> Tensor:
+        z = self.encoder(x)
+        z_indicies, _, _, _ = self.bottleneck(z)
+        return z_indicies.detach().cpu().long()
