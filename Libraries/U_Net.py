@@ -31,6 +31,7 @@ class ResBlock(nn.Module):
         x = self.layers(x)
         x = self.activation(x + identity)
         return self.downsample(x)
+
 class Simple_Embed(nn.Module):
     def __init__(self,  channels: int, embed_dim: int = 128) -> None:
         super(Simple_Embed, self).__init__()
