@@ -118,3 +118,4 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
             loss += sc_loss + mag_loss
 
         return loss / len(self.fft_sizes)
+    
