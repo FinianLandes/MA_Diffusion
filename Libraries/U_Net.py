@@ -12,41 +12,50 @@ class ResBlock(nn.Module):
 
         self.conv1 = nn.Conv1d(channels, channels, kernel_size, padding=pad, dilation=dilation)
         self.conv2 = nn.Conv1d(channels, channels, kernel_size, padding=pad, dilation=dilation)
+        self.norm1 = nn.BatchNorm1d(channels)
+        self.norm2 = nn.BatchNorm1d(channels)
 
-        self.act = nn.LeakyReLU(0.2)
+        self.act = nn.SiLU()
         self.time_proj = nn.Linear(t_embed, channels)
     
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
         t_embed = self.time_proj(t).unsqueeze(-1)
-        out = self.conv1(x)
+        out = self.conv1(self.act(self.norm1(x)))
         out = self.act(out + t_embed)
-        out = self.conv2(out)
+        out = self.conv2(self.act(self.norm2(out)))
         return self.act(out + x)
 
 class UNet(nn.Module):
-    def __init__(self, in_channels: int, n_layers: int, base_channels: int, embed_dim: int = 256) -> None:
+    def __init__(self, in_channels: int, n_layers: int, base_channels: int, embed_dim: int = 256, timesteps: int = 1000, v_obj_sampler: bool = True, kernel_size: int = 9) -> None:
         super().__init__()
         self.embed_dim = embed_dim
+        self.T = timesteps
+        self.v_obj = v_obj_sampler
         layers = []
         channels = base_channels
+        kernel_size = kernel_size if kernel_size % 2 == 1 else kernel_size + 1
+        padding = (kernel_size - 1) // 2
+        out_pad = 2 + 2 * padding - kernel_size
 
-        layers.append(nn.Conv1d(in_channels, channels, 7, padding=3))
-        for _ in range(n_layers):
-            layers.append(ResBlock(channels, embed_dim))
-            layers.append(nn.Conv1d(channels, channels * 2, 4, stride=2, padding=1))
+
+        layers.append(nn.Conv1d(in_channels, channels, kernel_size, padding=padding))
+        for i in range(n_layers):
+            layers.append(ResBlock(channels, embed_dim, kernel_size=kernel_size, dilation=2**i))
+            layers.append(nn.Conv1d(channels, channels * 2, kernel_size, stride=2, padding=padding))
             channels *= 2
         self.down_layers = nn.ModuleList(layers)
 
-        self.bottleneck = ResBlock(channels, embed_dim)
-
+        self.bottleneck = nn.ModuleList([ResBlock(channels, embed_dim, kernel_size=kernel_size, dilation=16),
+                                        ResBlock(channels, embed_dim, kernel_size=kernel_size, dilation=32)
+                                        ])
         layers = []
 
-        for _ in range(n_layers):
-            layers.append(nn.ConvTranspose1d(channels, channels // 2, 4, 2, 1))
-            layers.append(nn.Conv1d(channels, channels // 2, 3, padding=1))
-            layers.append(ResBlock(channels // 2, embed_dim))
+        for i in range(n_layers):
+            layers.append(nn.ConvTranspose1d(channels, channels // 2, kernel_size=kernel_size, stride=2, padding=padding, output_padding=out_pad))
+            layers.append(nn.Conv1d(channels, channels // 2, kernel_size=kernel_size, padding=padding))
+            layers.append(ResBlock(channels // 2, embed_dim, kernel_size=kernel_size, dilation=2**(n_layers - i - 1)))
             channels //= 2
-        layers.append(nn.Conv1d(channels, in_channels, 7, padding=3))
+        layers.append(nn.Conv1d(channels, in_channels, kernel_size=kernel_size, padding=padding))
         self.up_layers = nn.ModuleList(layers)
 
         self.time_mlp = nn.Sequential(nn.Linear(embed_dim, embed_dim),
@@ -57,6 +66,8 @@ class UNet(nn.Module):
     def time_embed(self, t: Tensor, embed_dim: int) -> Tensor:
         if t.ndim == 1:
             t = t[:, None]
+        if not self.v_obj: #-> scale to 0,1 if int steps
+            t = t.float() / (self.T - 1)
 
         half_dim = embed_dim // 2
         freqs = torch.exp(-math.log(10000) * torch.arange(0, half_dim, device=t.device).float() / half_dim)
@@ -77,7 +88,8 @@ class UNet(nn.Module):
             else:
                 x = layer(x)
 
-        x = self.bottleneck(x, t_emb)
+        for layer in self.bottleneck:
+            x = layer(x, t_emb)
 
         skips.reverse()
         i = 0

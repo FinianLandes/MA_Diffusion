@@ -12,6 +12,7 @@ from numpy import ndarray
 import matplotlib.pyplot as plt
 import librosa, os, logging, time, soundfile, tempfile
 from typing import Callable, Optional
+from collections import defaultdict
 #Logging
 LIGHT_DEBUG: int = 15
 
@@ -31,7 +32,7 @@ class AudioData():
         self.chunks = None
         self.spec_chunks = None
         self.sr = sr
-        self.metadata = metadata or {}
+        self.metadata = defaultdict(dict, metadata or {})
     
     def load_audio_file(self, path: str, mono: bool = True) -> ndarray:
         audio, current_sr = librosa.load(path, sr=None, mono=mono)
