@@ -1,6 +1,7 @@
 # Torch
 import torch
 from torch import nn, Tensor
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 import torch.optim as optim
 from torch.optim.lr_scheduler import _LRScheduler
@@ -8,6 +9,7 @@ from torch.optim import Optimizer
 import optuna
 # Utils
 import numpy as np
+from scipy.signal import firwin
 from numpy import ndarray
 import matplotlib.pyplot as plt
 import librosa, os, logging, time, soundfile, tempfile
@@ -83,7 +85,7 @@ class AudioData():
 
     def load_spectrogram(self, path: str) -> ndarray:
         self.spec_data = np.load(path)["stft"]
-        self.metadata["spectogram"]["shape"] = self.spec_data.shape
+        self.metadata["spectrogram"]["shape"] = self.spec_data.shape
         logger.light_debug(f"Spectrogram loaded from {path} of shape: {self.spec_data.shape}")
         return self.spec_data
     
@@ -102,7 +104,7 @@ class AudioData():
         if log:
             spec = np.log(spec + 1e-6)
         self.spec_data = spec
-        self.metadata["spectogram"]["shape"] = spec.shape
+        self.metadata["spectrogram"]["shape"] = spec.shape
         logger.light_debug(f"Created spectrogram: {spec.shape}")
         return spec
     
@@ -217,7 +219,7 @@ class AudioData():
             details.append(f"audio_data(shape={shape})")
         
         if self.spec_data is not None:
-            shape = self.metadata.get("spectogram", {}).get("shape", self.spec_data.shape if hasattr(self.spec_data, "shape") else "N/A")
+            shape = self.metadata.get("spectrogram", {}).get("shape", self.spec_data.shape if hasattr(self.spec_data, "shape") else "N/A")
             details.append(f"spectrogram_data(shape={shape})")
         
         if self.chunks is not None:
@@ -349,6 +351,395 @@ class AudioDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
 
+class PQMF(nn.Module):
+    def __init__(self, N: int, taps: int, beta: float, device: str = "cpu" ) -> None:
+        super().__init__()
+        self.N = N
+        self.M = taps if taps % 2 == 0 else taps + 1
+        self.pad = self.M // 2
+        self.device = device
+
+        cutoff = 1.0 / N
+        t = np.arange(-self.M // 2, self.M // 2, dtype=np.float64)
+        h_proto = np.sinc( 2* cutoff * t)
+        win = np.kaiser(self.M, beta=beta).astype(np.float64)
+        h_proto *= win
+        h_proto /= np.sum(h_proto)
+
+        h = np.zeros((N, self.M), dtype=np.float64)
+        M_center = (self.M - 1) / 2.0
+        for k in range(N):
+            phase = (np.pi * (2 * k + 1) / (2.0 * N)) * (np.arange(self.M) - M_center)
+            h[k, :] = 2.0 * h_proto * np.cos(phase + ((-1)**k) * (np.pi / 4.0))
+
+        h_torch = torch.tensor(h).unsqueeze(1).to(device=self.device, dtype=torch.float32)
+
+        self.register_buffer("analysis_filter", h_torch)
+        self.register_buffer("synthesis_filter", h_torch.clone())
+
+    def analysis(self, x: Tensor) -> Tensor:
+        if x.ndim == 2:
+            x = x.unsqueeze(1)
+        B, C, L = x.shape
+        assert C == 1, "PQMF.analysis expects mono input (B,1,L)."
+        x_p = F.pad(x, (self.pad, self.pad), mode='reflect')
+        y = F.conv1d(x_p, self.analysis_filter, stride=self.N, padding=0)
+        return y
+
+    def synthesis(self, subbands: Tensor, length: int | None = None) -> Tensor:
+        w = self.synthesis_filter  # (N,1,M)
+        x_p = F.conv_transpose1d(subbands, w, stride=self.N, padding=self.pad)
+        if length is not None:
+            x_p = x_p[..., :length]
+        return x_p
+    
+    def reconstruct_bands(self, x: Tensor) -> Tensor:
+        subbands = self.analysis(x)
+        B, N, _ = subbands.shape
+        L = x.shape[-1]
+        band_signals = []
+        for k in range(N):
+            mask = torch.zeros_like(subbands)
+            mask[:, k, :] = subbands[:, k, :]
+            band_k = self.synthesis(mask, length=L)
+            band_signals.append(band_k.squeeze(1))
+        return torch.stack(band_signals, dim=1)
+
+    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        sub = self.analysis(x)
+        rec = self.synthesis(sub, length=x.shape[-1])
+        return sub, rec
+
+    def _build_diag_synthesis_weight(self) -> Tensor:
+        N, M = self.N, self.M
+        W = torch.zeros(N, N, M, dtype=self.synthesis_filter.dtype, device=self.synthesis_filter.device)
+        for i in range(N):
+            W[i, i, :] = self.synthesis_filter[i, 0, :]
+        return W
+
+    @torch.no_grad()
+    def synthesize_bands(self, subbands: Tensor, length: int | None = None) -> Tensor:
+        if not hasattr(self, "_synth_diag") or self._synth_diag.shape[0] != self.N:
+            self._synth_diag = self._build_diag_synthesis_weight()
+        y = F.conv_transpose1d(subbands, self._synth_diag, stride=self.N, padding=self.pad)
+        if length is not None:
+            y = y[..., :length]
+        return y
+
+    @torch.no_grad()
+    def synthesize_single_band(self, subbands: Tensor, k: int, length: int | None = None) -> Tensor:
+        y_all = self.synthesize_bands(subbands, length=length)
+        return y_all[:, k:k+1, :]
+
+    @torch.no_grad()
+    def synthesize_selected(self, subbands: Tensor, indices: list[int], length: int | None = None, reduce: bool = True) -> Tensor:
+        y_all = self.synthesize_bands(subbands, length=length)
+        y_sel = y_all[:, indices, :]
+        if reduce:
+            return y_sel.sum(dim=1, keepdim=True)
+        return y_sel
+
+    @torch.no_grad()
+    def test_pqmf(self, audio_batch: Tensor, num_examples: int = 2) -> None:
+        logger.info(f"Input batch: {audio_batch.shape}")
+
+        subbands = self.analysis(audio_batch)
+        logger.info(f"Subbands shape: {subbands.shape}")
+
+        recon = self.synthesis(subbands, length=audio_batch.shape[-1])
+        logger.info(f"Reconstructed shape: {recon.shape}")
+
+        bands_up = self.synthesize_bands(subbands, length=audio_batch.shape[-1])
+        logger.info(f"Bands upsampled: {bands_up.shape}")
+
+        for i in range(min(num_examples, audio_batch.shape[0])):
+            plt.figure(figsize=(14,6))
+
+            plt.subplot(2,1,1)
+            plt.plot(audio_batch[i,0].cpu().numpy(), label="original", alpha=0.7)
+            plt.plot(recon[i,0].cpu().numpy(), label="reconstructed", alpha=0.7)
+            plt.title(f"PQMF reconstruction check (sample {i})")
+            plt.legend()
+
+            plt.subplot(2,1,2)
+            err = (audio_batch[i,0] - recon[i,0]).cpu().numpy()
+            plt.plot(err)
+            plt.title("Reconstruction error")
+            plt.tight_layout()
+            plt.show()
+
+        for i in range(min(num_examples, audio_batch.shape[0])):
+            fig, axes = plt.subplots(self.N, 1, figsize=(14, 2*self.N), sharex=True)
+            fig.suptitle(f"Upsampled bands (sample {i})")
+
+            for k in range(self.N):
+                axes[k].plot(bands_up[i,k].cpu().numpy())
+                axes[k].set_ylabel(f"Band {k}")
+            plt.tight_layout()
+            plt.show()
+
+        sum_bands = bands_up.sum(dim=1, keepdim=True)
+        diff = (recon - sum_bands).abs().max().item()
+        logger.info(f"Max |recon - sum(bands)| = {diff:.2e}")
+
+class Filterbank(nn.Module):
+    def __init__(self, freq_edges: list, taps: int, sample_rate: int) -> None:
+        super().__init__()
+        self.freq_edges = freq_edges
+        self.taps = taps
+        self.sr = sample_rate
+        self.N = len(freq_edges) - 1
+
+        filters = []
+        nyq = sample_rate / 2
+        eps = 1e-6
+        for i in range(self.N):
+            low = max(freq_edges[i] / nyq, eps)
+            high = min(freq_edges[i+1] / nyq, 1 - eps)
+
+            if i == 0:
+                h = firwin(taps, high, pass_zero=True, window=("kaiser", 10))
+            else:
+                h = firwin(taps, [low, high], pass_zero=False, window=("kaiser", 10))
+
+            h_tensor = torch.tensor(h, dtype=torch.float32).view(1,1,-1)
+            filters.append(h_tensor)
+        self.register_buffer("filters", torch.cat(filters, dim=0))  # (N,1,taps)
+        self.pad = taps // 2
+
+    def analysis(self, x: Tensor) -> Tensor:
+        if x.ndim == 2:
+            x = x.unsqueeze(1)
+        B, C, L = x.shape
+        bands = []
+        for n in range(self.N):
+            h = self.filters[n:n+1]
+            y = F.conv1d(x, h, padding=self.pad)
+            y = y[..., :L]
+            bands.append(y)
+        return torch.cat(bands, dim=1)
+
+    def synthesis(self, bands: Tensor, length: int = None) -> Tensor:
+        x_rec = bands[:,0:1,:]
+        for n in range(1, self.N):
+            x_rec = x_rec + bands[:,n:n+1,:]
+        if length is not None:
+            x_rec = x_rec[:,:,:length]
+        return x_rec
+
+    @torch.no_grad()
+    def synthesize_bands(self, bands: Tensor, length: int = None) -> Tensor:
+        if length is not None and bands.shape[-1] != length:
+            return F.interpolate(bands, size=length, mode="linear", align_corners=False)
+        return bands
+
+    @torch.no_grad()
+    def synthesize_single_band(self, bands: Tensor, k: int, length: int = None) -> Tensor:
+        y_all = self.synthesize_bands(bands, length=length)
+        return y_all[:, k:k+1, :]
+
+    @torch.no_grad()
+    def synthesize_selected(self, bands: Tensor, indices: list[int], length: int = None, reduce: bool = True) -> Tensor:
+        y_all = self.synthesize_bands(bands, length=length)
+        y_sel = y_all[:, indices, :]
+        if reduce:
+            return y_sel.sum(dim=1, keepdim=True)
+        return y_sel
+
+    @torch.no_grad()
+    def test_filterbank(self, audio_batch: Tensor, num_examples: int = 2):
+        subbands = self.analysis(audio_batch)
+        recon = self.synthesis(subbands, length=audio_batch.shape[-1])
+        bands_up = self.synthesize_bands(subbands, length=audio_batch.shape[-1])
+
+        for i in range(min(num_examples, audio_batch.shape[0])):
+            plt.figure(figsize=(14,6))
+            plt.subplot(2,1,1)
+            plt.plot(audio_batch[i,0].cpu().numpy(), label="original", alpha=0.7)
+            plt.plot(recon[i,0].cpu().numpy(), label="reconstructed", alpha=0.7)
+            plt.title(f"Reconstruction check (sample {i})")
+            plt.legend()
+
+            plt.subplot(2,1,2)
+            err = (audio_batch[i,0] - recon[i,0]).cpu().numpy()
+            plt.plot(err)
+            plt.title("Reconstruction error")
+            plt.tight_layout()
+            plt.show()
+
+        for i in range(min(num_examples, audio_batch.shape[0])):
+            fig, axes = plt.subplots(self.N, 1, figsize=(14, 2*self.N), sharex=True)
+            fig.suptitle(f"Upsampled bands (sample {i})")
+            for k in range(self.N):
+                axes[k].plot(bands_up[i,k].cpu().numpy())
+                axes[k].set_ylabel(f"Band {k}")
+            plt.tight_layout()
+            plt.show()
+
+        sum_bands = bands_up.sum(dim=1, keepdim=True)
+        diff = (recon - sum_bands).abs().max().item()
+        logger.info(f"Max |recon - sum(bands)| = {diff:.2e}")
+
+class TrainingUtils():
+    def __init__(self) -> None:
+        ...
+    def random_crop_batch(self, audio: Tensor, seq_len: int) -> Tensor:
+        if audio.ndim == 2:
+            audio = audio.unsqueeze(1)
+        B, C, L = audio.shape
+
+        assert L >= seq_len, "Audio length needs to be equal or larger than the seq lenght"
+
+        start_idx = torch.randint(0, L - seq_len + 1, (B, 1), device=audio.device)
+        offsets = torch.arange(seq_len, device=audio.device).unsqueeze(0)
+        indices = start_idx + offsets
+        indices = indices.unsqueeze(1).expand(-1, C, -1)
+        return torch.gather(audio, 2, indices)
+    
+    def mse(self, a: Tensor, b: Tensor) -> float:
+        return nn.functional.mse_loss(a, b).item()
+
+    def snr_db(self, ref: Tensor, est: Tensor) -> float:
+        num = torch.sum(ref.float() ** 2).item()
+        err = torch.sum((ref.float() - est.float()) ** 2).item() + 1e-12
+        return 10.0 * np.log10(num / err) if err > 0 else float("inf")
+
+    def diagnostics_v_obj(self, diffusion, u_net: nn.Module, val_dataloader: DataLoader, num_samples: int = 4, len_sample: int = 2**18, sigma_list: list[float] = [0.05, 0.25, 0.5], downsample_plot: int = 16,show_spectrogram: bool = False):
+        u_net.eval()
+        diagnostics: dict = {}
+
+        # Load batch
+        audio_batch, _ = next(iter(val_dataloader))
+        audio_batch = audio_batch.to(diffusion.device)
+        if audio_batch.ndim == 2:
+            audio_batch = audio_batch.unsqueeze(1)
+        audio_batch = audio_batch[:num_samples, :, :len_sample].detach().clone()
+        
+        B, C, L = audio_batch.shape
+        logger.info(f"Diagnostics on batch shape {audio_batch.shape}")
+
+        # If filterbank exists, process audio to N bands
+        if diffusion.fb is not None:
+            audio_input = diffusion.fb.analysis(audio_batch)  # shape [B, N, L]
+        else:
+            audio_input = audio_batch  # shape [B, 1, L]
+
+        for sigma_val in sigma_list:
+            logger.info(f"\n=== Sigma = {sigma_val} ===")
+            sigma_b = torch.full((B,), float(sigma_val), device=diffusion.device, dtype=torch.float32)
+
+            # Add noise in v-objective space
+            x_sigma, eps_true = diffusion.noise_img_v_obj(audio_input, sigma_b)
+            a, b = diffusion.get_semicircle_weights(sigma_b)
+            true_v = a * eps_true - b * audio_input
+
+            # Reconstruct eps/x0 from true_v
+            eps_from_true_v = (true_v + b * audio_input) / a
+            x0_from_true_v = (a * eps_from_true_v - true_v) / b
+
+            mse_eps_rec = self.mse(eps_from_true_v, eps_true)
+            snr_eps_rec = self.snr_db(eps_true, eps_from_true_v)
+            mse_x0_true = self.mse(x0_from_true_v, audio_input)
+            snr_x0_true = self.snr_db(audio_input, x0_from_true_v)
+
+            logger.info(f"eps recovery from true_v -> MSE={mse_eps_rec:.4e}, SNR={snr_eps_rec:.2f} dB")
+            logger.info(f"x0 recovery from true_v -> MSE={mse_x0_true:.4e}, SNR={snr_x0_true:.2f} dB")
+
+            # Model prediction
+            with torch.no_grad():
+                pred_v = u_net(x_sigma, sigma_b)
+
+            # Compute metrics
+            mse_v = self.mse(pred_v, true_v)
+            snr_v = self.snr_db(true_v, pred_v)
+            eps_from_pred_v = (pred_v + b * audio_input) / a
+            x0_from_pred_v = (a * eps_from_pred_v - pred_v) / b
+
+            mse_eps_pred = self.mse(eps_from_pred_v, eps_true)
+            snr_eps_pred = self.snr_db(eps_true, eps_from_pred_v)
+            mse_x0_pred = self.mse(x0_from_pred_v, audio_input)
+            snr_x0_pred = self.snr_db(audio_input, x0_from_pred_v)
+
+            logger.info(f"pred_v vs true_v -> MSE={mse_v:.4e}, SNR={snr_v:.2f} dB")
+            logger.info(f"eps from pred_v -> MSE={mse_eps_pred:.4e}, SNR={snr_eps_pred:.2f} dB")
+            logger.info(f"x0 from pred_v -> MSE={mse_x0_pred:.4e}, SNR={snr_x0_pred:.2f} dB")
+
+            # One-step consistency
+            sigma_next = max(0.0, sigma_val - 0.01)
+            sigma_next_b = torch.full((B,), sigma_next, device=diffusion.device)
+            a1, b1 = diffusion.get_semicircle_weights(sigma_next_b)
+            x_next_true = a1 * audio_input + b1 * eps_from_true_v
+            x_next_pred = a1 * x0_from_pred_v + b1 * eps_from_pred_v
+            mse_step = self.mse(x_next_true, x_next_pred)
+            logger.info(f"One-step next-state consistency: MSE={mse_step:.4e}")
+
+            diagnostics[sigma_val] = {
+                "mse_eps_rec_true": mse_eps_rec,
+                "snr_eps_rec_true": snr_eps_rec,
+                "mse_x0_true": mse_x0_true,
+                "snr_x0_true": snr_x0_true,
+                "mse_v": mse_v,
+                "snr_v": snr_v,
+                "mse_eps_pred": mse_eps_pred,
+                "snr_eps_pred": snr_eps_pred,
+                "mse_x0_pred": mse_x0_pred,
+                "snr_x0_pred": snr_x0_pred,
+                "mse_xnext": mse_step
+            }
+
+            # Plot velocities and x0 reconstructions
+            for i in range(min(B, num_samples)):
+                tv = true_v[i, 0].cpu().numpy()[::downsample_plot]
+                pv = pred_v[i, 0].cpu().numpy()[::downsample_plot]
+                xs = x_sigma[i, 0].cpu().numpy()[::downsample_plot]
+                x0t = audio_input[i, 0].cpu().numpy()[::downsample_plot]
+                x0_true_rec = x0_from_true_v[i, 0].cpu().numpy()[::downsample_plot]
+                x0_pred_rec = x0_from_pred_v[i, 0].cpu().numpy()[::downsample_plot]
+
+                fig, axes = plt.subplots(2, 1, figsize=(12, 5), sharex=True)
+                axes[0].plot(tv, label="true_v")
+                axes[0].plot(pv, label="pred_v", alpha=0.8)
+                axes[0].set_title(f"Velocities σ={sigma_val:.3f} sample={i}")
+                axes[0].legend()
+
+                axes[1].plot(xs, label="x_sigma (noisy)")
+                axes[1].plot(x0t, label="x0 true")
+                axes[1].plot(x0_true_rec, label="x0 from true_v", linestyle="--")
+                axes[1].plot(x0_pred_rec, label="x0 from pred_v", linestyle=":")
+                axes[1].set_title(f"x0 reconstructions σ={sigma_val:.3f} sample={i}")
+                axes[1].legend()
+
+                fig.tight_layout()
+                plt.show()
+
+        logger.info("\nDiagnostics complete.")
+        return diagnostics
+
+
+
+    def visualize_audio_and_spect(self, audio: ndarray) -> None:
+        if audio.ndim == 3:
+            audio = audio[0][0]
+        elif audio.ndim == 2:
+            audio = audio[0]
+        ad = AudioData(audio)
+        spect = ad.audio_to_spectrogram()
+        fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+
+        axes[0].plot(audio)
+        axes[0].set_title("Waveform")
+        axes[0].set_xlabel("Samples")
+        axes[0].set_ylabel("Amplitude")
+
+        im = axes[1].imshow(spect, aspect='auto', origin='lower', interpolation='none', cmap='magma')
+        axes[1].set_title("Spectrogram")
+        axes[1].set_xlabel("Time bins")
+        axes[1].set_ylabel("Frequency bins")
+        fig.colorbar(im, ax=axes[1], format='%+2.0f dB')
+
+        plt.tight_layout()
+        plt.show()
+
 
 def flatten(data: ndarray) -> ndarray:
     """Flattens a 3D (N,H,W) to 2d (N,H*W).
@@ -430,7 +821,7 @@ def generate_latent_repr(vq_vae: nn.Module, data: Dataset, batch_size: int = 24,
     new_data = torch.cat(converted_data, dim=0)
     return AudioDataset(new_data, data_type=torch.long)
 
-class DiffusionTrainer():
+class DiffusionTrainer_depr():
     def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu", embed_fun: Callable | None = None, embed_dim: int | None = None, n_dims: int = 1)-> None:
         self.model = model
         self.optimizer = optimizer
@@ -613,5 +1004,4 @@ class DiffusionTrainer():
         for i, sample in enumerate(samples):
             audio = AudioData().spectrogram_to_audio(OS().normalize(sample, -50, 50), len_fft, len_hop)
             AudioData().save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sr=sr)
-    
 

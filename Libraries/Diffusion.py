@@ -9,9 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class Diffusion():
-    def __init__(self, noise_steps: int, schedule: str = "cosine", v_obj: bool = False, device: str = "cpu") -> None:
+    def __init__(self, noise_steps: int, schedule: str = "cosine", inp_shape: list = [12, 1, 262144], device: str = "cpu", filter: Filterbank | PQMF | None = None) -> None:
         self.T = noise_steps
+        self.fb = filter
         self.device = device
+        self.inp_shape = inp_shape
         self.beta = self.get_noise_schedule(schedule).to(self.device)[:, None, None]
         self.alpha = 1 - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
@@ -44,11 +46,20 @@ class Diffusion():
         return torch.randint(0, self.T, (n,)).to(self.device).to(torch.long)
     
     def prep_train_ddxm(self, inp: Tensor) -> tuple[Tensor, ...]:
+        if self.fb:
+            inp = self.fb.analysis(inp)
         timesteps = self.get_sampling_timesteps(inp.shape[0])
         x_t, noise = self.noise_data(inp, timesteps)
         return x_t, noise, timesteps
     
-    
+    def x0_from_v(self, v: Tensor, x_sigma: Tensor, sigma_b: Tensor) -> Tensor:
+        a, b = self.get_semicircle_weights(sigma_b)
+        eps_hat = (v + b * x_sigma) / a
+        x0_hat  = (a * eps_hat - v) / b
+        if self.fb:
+            x0_hat = self.fb.synthesis(x0_hat, self.inp_shape[-1])
+        return x0_hat
+
     def get_semicircle_weights(self, sigma_t: Tensor) -> tuple[Tensor, ...]:
             phi_t = (torch.pi / 2.0) * sigma_t
             alpha = torch.cos(phi_t)
@@ -62,6 +73,8 @@ class Diffusion():
         return x_sigma_t, epsilon
     
     def prep_train_v_obj(self, inp: Tensor) -> tuple[Tensor, ...]:
+        if self.fb:
+            inp = self.fb.analysis(inp)
         sigma_t = torch.rand(inp.shape[0]).to(self.device)
         x_sigma_t, e = self.noise_img_v_obj(inp, sigma_t)
         a, b = self.get_semicircle_weights(sigma_t)
@@ -78,6 +91,9 @@ class Diffusion():
         batch = shape[0]
         
         x = torch.randn(shape).to(self.device) if seed is None else seed
+        if self.fb:
+                    x = self.fb.analysis(x)
+
         for i in reversed(range(1, timesteps)):
             t = torch.full((batch,), i, dtype=torch.long, device=self.device)
             with torch.no_grad():
@@ -94,6 +110,8 @@ class Diffusion():
                 x = x + torch.sqrt(beta_t) * noise
 
         logger.info(f"Created {batch} samples")
+        if self.fb:
+            x = self.fb.synthesis(x, shape[-1])
         return x.cpu().numpy()
     
     def bwd_diffusion_ddim(self, model: nn.Module, shape: list, n_steps: int, eta: float = 0.0, seed: Tensor | None = None) -> ndarray:
@@ -106,6 +124,8 @@ class Diffusion():
         timesteps_ind = torch.linspace(0, timesteps - 1, steps=n_steps, dtype=torch.long, device=self.device)
 
         x = torch.randn(shape).to(self.device) if seed is None else seed
+        if self.fb:
+            x = self.fb.analysis(x)
         
         for i in reversed(range(1, n_steps)):
             t = timesteps_ind[i]
@@ -126,6 +146,8 @@ class Diffusion():
                 x += sigma_t * torch.randn_like(x)
         
         logger.info(f"Created {batch} samples")
+        if self.fb:
+            x = self.fb.synthesis(x, shape[-1])
         return x.cpu().numpy()
     
     def bwd_diffusion_v_obj(self, model: nn.Module, shape: list, n_steps: int, seed: Tensor | None = None):
@@ -133,9 +155,12 @@ class Diffusion():
         model.eval()
 
         batch = shape[0]
-        x = torch.randn(shape, device=self.device) if seed is None else seed.to(self.device)
+        if self.fb:
+            x = torch.randn((batch, self.fb.N, shape[-1]), device=self.device)
+        else:
+            x = torch.randn(shape, device=self.device)
 
-        # reverse sigmas: 1 → 0
+
         sigmas = torch.linspace(1.0, 0.0, n_steps + 1, device=self.device)
 
         for i in range(n_steps):
@@ -148,14 +173,14 @@ class Diffusion():
             with torch.no_grad():
                 v_pred = model(x, sigma_t_b)
 
-            # weights
             a, b   = self.get_semicircle_weights(sigma_t_b)
             a1, b1 = self.get_semicircle_weights(sigma_tp1_b)
 
-            # Archisound-style update (no divisions!)
             x_pred    = a * x - b * v_pred
             noise_pred = b * x + a * v_pred
             x = a1 * x_pred + b1 * noise_pred
 
         logger.info(f"Created {batch} samples")
-        return x.cpu().numpy()
+        if self.fb:
+            reconst = self.fb.synthesis(x, shape[-1])
+        return reconst.cpu().numpy(), x
