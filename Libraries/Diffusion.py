@@ -111,7 +111,7 @@ class Diffusion():
 
         logger.info(f"Created {batch} samples")
         if self.fb:
-            x = self.fb.synthesis(x, shape[-1])
+            return self.fb.synthesis(x, shape[-1]).cpu().numpy(), x.cpu().numpy()
         return x.cpu().numpy()
     
     def bwd_diffusion_ddim(self, model: nn.Module, shape: list, n_steps: int, eta: float = 0.0, seed: Tensor | None = None) -> ndarray:
@@ -147,7 +147,7 @@ class Diffusion():
         
         logger.info(f"Created {batch} samples")
         if self.fb:
-            x = self.fb.synthesis(x, shape[-1])
+            return self.fb.synthesis(x, shape[-1]).cpu().numpy(), x.cpu().numpy()
         return x.cpu().numpy()
     
     def bwd_diffusion_v_obj(self, model: nn.Module, shape: list, n_steps: int, seed: Tensor | None = None):
@@ -164,23 +164,23 @@ class Diffusion():
         sigmas = torch.linspace(1.0, 0.0, n_steps + 1, device=self.device)
 
         for i in range(n_steps):
-            sigma_t   = sigmas[i]
+            sigma_t = sigmas[i]
             sigma_tp1 = sigmas[i+1]
 
-            sigma_t_b   = torch.full((batch,), sigma_t,   device=self.device)
+            sigma_t_b = torch.full((batch,), sigma_t, device=self.device)
             sigma_tp1_b = torch.full((batch,), sigma_tp1, device=self.device)
 
             with torch.no_grad():
                 v_pred = model(x, sigma_t_b)
 
-            a, b   = self.get_semicircle_weights(sigma_t_b)
+            a, b = self.get_semicircle_weights(sigma_t_b)
             a1, b1 = self.get_semicircle_weights(sigma_tp1_b)
 
-            x_pred    = a * x - b * v_pred
+            x_pred = a * x - b * v_pred
             noise_pred = b * x + a * v_pred
             x = a1 * x_pred + b1 * noise_pred
 
         logger.info(f"Created {batch} samples")
         if self.fb:
-            reconst = self.fb.synthesis(x, shape[-1])
-        return reconst.cpu().numpy(), x
+            return self.fb.synthesis(x, shape[-1]).cpu().numpy(), x.cpu().numpy()
+        return x.cpu().numpy()
