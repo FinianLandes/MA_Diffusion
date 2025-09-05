@@ -1,20 +1,27 @@
+##############
+# Utils Library
+# By Finian Landes
+##############
+
+
 # Torch
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-import torch.optim as optim
-from torch.optim.lr_scheduler import _LRScheduler
-from torch.optim import Optimizer
 # Utils
 import numpy as np
 from scipy.signal import firwin
 from numpy import ndarray
 import matplotlib.pyplot as plt
 import librosa, os, logging, time, soundfile
-from typing import Callable, Optional
+from typing import Optional
 from collections import defaultdict
-#Logging
+
+##############
+# Additional Logging Level between Debug and Info
+##############
+
 LIGHT_DEBUG: int = 15
 
 def light_debug(self, message, *args, **kws) -> None:
@@ -23,11 +30,22 @@ def light_debug(self, message, *args, **kws) -> None:
 
 logging.addLevelName(LIGHT_DEBUG, "LIGHT_DEBUG")
 logging.Logger.light_debug = light_debug
-
 logger = logging.getLogger(__name__)
+
+##############
+# Main Util Classes
+##############
 
 class AudioData():
     def __init__(self, data: Optional[ndarray] = None, spec_data: Optional[ndarray] = None, sr: int = 32000, metadata: Optional[dict] = None) -> None:
+        """Initialize the AudioData object.
+
+        Args:
+            data (Optional[ndarray], optional): The audio data. Defaults to None.
+            spec_data (Optional[ndarray], optional): The spectrogram data. Defaults to None.
+            sr (int, optional): The sample rate. Defaults to 32000.
+            metadata (Optional[dict], optional): The metadata for the audio file. Defaults to None.
+        """
         self.data = data
         self.spec_data = spec_data
         self.chunks = None
@@ -36,6 +54,15 @@ class AudioData():
         self.metadata = defaultdict(dict, metadata or {})
     
     def load_audio_file(self, path: str, mono: bool = True) -> ndarray:
+        """Load an audio file.
+
+        Args:
+            path (str): The path to the audio file.
+            mono (bool, optional): Whether to load the audio file in mono. Defaults to True.
+
+        Returns:
+            ndarray: The loaded audio data.
+        """
         audio, current_sr = librosa.load(path, sr=None, mono=mono)
         if current_sr != self.sr:
             audio = librosa.resample(audio, orig_sr=current_sr, target_sr=self.sr)
@@ -45,7 +72,17 @@ class AudioData():
         logger.light_debug(f"Loaded audio from {path} of dimensions: {audio.shape}, sr: {self.sr}")
         return audio
     
-    def save_audio_file(self, path: str, norm: bool = True):
+    def save_audio_file(self, path: str, norm: bool = True) -> None:
+        """Save audio data to a file.
+
+        Args:
+            path (str): The path to the file to save the audio data.
+            norm (bool, optional): Whether to normalize the audio data before saving. Defaults to True.
+
+        Raises:
+            ValueError: If no audio data is available to save.
+        """
+
         if self.data is None:
             raise ValueError("No audio data to save. Load data first.")
         if not path.endswith((".wav", ".mp3", ".flac")):
@@ -57,6 +94,19 @@ class AudioData():
         logger.light_debug(f"Saved audio to: {path}")
     
     def split_audiofile(self, length: float, overlap_s: float = 0, norm: bool = True) -> ndarray:
+        """Split the audio file into chunks.
+
+        Args:
+            length (float): The length of each chunk in seconds.
+            overlap_s (float, optional): The overlap between chunks in seconds. Defaults to 0.
+            norm (bool, optional): Whether to normalize each chunk. Defaults to True.
+
+        Returns:
+            ndarray: The split audio chunks.
+
+        Raises:
+            ValueError: If no audio data is available to split.
+        """
         if self.data is None:
             raise ValueError("Data missing you need to load an audiofile first")
         audio = self.data
@@ -83,18 +133,47 @@ class AudioData():
         return data
 
     def load_spectrogram(self, path: str) -> ndarray:
+        """Load a spectrogram from a file.
+
+        Args:
+            path (str): The path to the spectrogram file.
+
+        Returns:
+            ndarray: The loaded spectrogram data.
+        """
         self.spec_data = np.load(path)["stft"]
         self.metadata["spectrogram"]["shape"] = self.spec_data.shape
         logger.light_debug(f"Spectrogram loaded from {path} of shape: {self.spec_data.shape}")
         return self.spec_data
     
     def save_spectrogram(self, path: str) -> None:
+        """Save the spectrogram to a file.
+
+        Args:
+            path (str): The path to the spectrogram file.
+
+        Raises:
+            ValueError: If no spectrogram data is available to save.
+        """
         if self.spec_data is None:
             raise ValueError("No spectrogram data to save. Load data first.")
         np.savez_compressed(path, stft=self.spec_data)
         logger.light_debug(f"Saved spectrogram to: {path}")
     
     def audio_to_spectrogram(self, len_fft: int = 1023, hop_length: int = 256, log: bool = True) -> ndarray:
+        """Convert audio to spectrogram.
+
+        Args:
+            len_fft (int, optional): The length of the FFT window. Defaults to 1023.
+            hop_length (int, optional): The hop length for the STFT. Defaults to 256.
+            log (bool, optional): Whether to apply log scaling. Defaults to True.
+
+        Raises:
+            ValueError: If no audio data is available to convert.
+
+        Returns:
+            ndarray: The converted spectrogram.
+        """
         if self.data is None:
             raise ValueError("No audio data to convert. Load data first.")
         logger.light_debug("Started STFT")
@@ -108,6 +187,19 @@ class AudioData():
         return spec
     
     def audio_splits_to_spectrograms(self, len_fft: int = 1023, hop_length: int = 256, log: bool = True) -> ndarray:
+        """Convert audio splits to spectrograms.
+
+        Args:
+            len_fft (int, optional): The length of the FFT window. Defaults to 1023.
+            hop_length (int, optional): The hop length for the STFT. Defaults to 256.
+            log (bool, optional): Whether to apply log scaling. Defaults to True.
+
+        Raises:
+            ValueError: If no audio chunks are available to convert.
+
+        Returns:
+            ndarray: The converted spectrograms.
+        """
         if self.chunks is None:
             raise ValueError("No audio chunks to convert. Split audio first.")
         logger.light_debug("Started STFT on splits")
@@ -128,7 +220,20 @@ class AudioData():
         logger.debug(f"Created spectrograms of splits: {specs.shape}")
         return specs
     
-    def spectrogram_to_audio(self, len_fft: int = 1023, hop_length: int = 256, log: bool = True) -> np.ndarray:
+    def spectrogram_to_audio(self, len_fft: int = 1023, hop_length: int = 256, log: bool = True) -> ndarray:
+        """Convert a spectrogram back to audio.
+
+        Args:
+            len_fft (int, optional): The length of the FFT window. Defaults to 1023.
+            hop_length (int, optional): The hop length for the STFT. Defaults to 256.
+            log (bool, optional): Whether to apply log scaling. Defaults to True.
+
+        Raises:
+            ValueError: If no spectrogram data is available to convert.
+
+        Returns:
+            ndarray: The converted audio.
+        """
         if self.spec_data is None:
             raise ValueError("No spectrogram data to convert. Load or create spectrogram first.")
         logger.debug("Started GL")
@@ -145,6 +250,22 @@ class AudioData():
         return audio
 
     def audio_splits_to_mel_spectrograms(self, len_fft: int = 1023, hop_length: int = 256, min_freq: int = 30, max_freq: int = 16000, n_mels: int = 128, log: bool = True) -> ndarray:
+        """Convert audio splits to mel-spectrograms.
+
+        Args:
+            len_fft (int, optional): The length of the FFT window. Defaults to 1023.
+            hop_length (int, optional): The hop length for the STFT. Defaults to 256.
+            min_freq (int, optional): The minimum frequency for the mel filter bank. Defaults to 30.
+            max_freq (int, optional): The maximum frequency for the mel filter bank. Defaults to 16000.
+            n_mels (int, optional): The number of mel bands. Defaults to 128.
+            log (bool, optional): Whether to apply log scaling. Defaults to True.
+
+        Raises:
+            ValueError: If no audio chunks are available to convert.
+
+        Returns:
+            ndarray: The converted mel-spectrograms.
+        """
         if self.chunks is None:
             raise ValueError("No audio chunks to convert. Split audio first.")
         logger.debug("Started Mel-Spec on splits")
@@ -165,6 +286,22 @@ class AudioData():
         return specs
     
     def audio_to_mel_spectrogram(self, len_fft: int = 1023, hop_length: int = 256, min_freq: int = 30, max_freq: int = 16000, n_mels: int = 128, log: bool = True) -> ndarray:
+        """Convert audio to mel-spectrogram.
+
+        Args:
+            len_fft (int, optional): The length of the FFT window. Defaults to 1023.
+            hop_length (int, optional): The hop length for the STFT. Defaults to 256.
+            min_freq (int, optional): The minimum frequency for the mel filter bank. Defaults to 30.
+            max_freq (int, optional): The maximum frequency for the mel filter bank. Defaults to 16000.
+            n_mels (int, optional): The number of mel bands. Defaults to 128.
+            log (bool, optional): Whether to apply log scaling. Defaults to True.
+
+        Raises:
+            ValueError: If no audio data is available to convert.
+
+        Returns:
+            ndarray: The converted mel-spectrogram.
+        """
         if self.data is None:
             raise ValueError("No audio data to convert. Load data first.")
         logger.debug("Started Mel-Spec")
@@ -177,6 +314,21 @@ class AudioData():
         return spec
     
     def mel_spectrogram_to_audio(self, len_fft: int = 1023, hop_length: int = 256, min_freq: int = 30, max_freq: int = 16000, log: bool = True) -> ndarray:
+        """Convert mel-spectrogram to audio.
+
+        Args:
+            len_fft (int, optional): The length of the FFT window. Defaults to 1023.
+            hop_length (int, optional): The hop length for the STFT. Defaults to 256.
+            min_freq (int, optional): The minimum frequency for the mel filter bank. Defaults to 30.
+            max_freq (int, optional): The maximum frequency for the mel filter bank. Defaults to 16000.
+            log (bool, optional): Whether to apply log scaling. Defaults to True.
+
+        Raises:
+            ValueError: If no spectrogram data is available to convert.
+
+        Returns:
+            ndarray: The reconstructed audio signal.
+        """
         if self.spec_data is None:
             raise ValueError("No spectrogram data to convert. Load or create spectrogram first.")
         logger.debug("Started GL")
@@ -191,6 +343,16 @@ class AudioData():
         return audio
     
     def normalize(self, data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
+        """Normalize the audio data to a specified range.
+
+        Args:
+            data (ndarray): The audio data to normalize.
+            min_val (float, optional): The minimum value of the normalized data. Defaults to -1.
+            max_val (float, optional): The maximum value of the normalized data. Defaults to 1.
+
+        Returns:
+            ndarray: The normalized audio data.
+        """
         min_data: float = np.min(data)
         max_data: float = np.max(data)
         scaled_data: ndarray = (data - min_data) / (max_data - min_data)
@@ -199,6 +361,16 @@ class AudioData():
         return normalized_data
 
     def normalize_filewise(self, data: ndarray, min_val: float = -1, max_val: float = 1) -> ndarray:
+        """Normalize the audio data file-wise to a specified range.
+
+        Args:
+            data (ndarray): The audio data to normalize.
+            min_val (float, optional): The minimum value of the normalized data. Defaults to -1.
+            max_val (float, optional): The maximum value of the normalized data. Defaults to 1.
+
+        Returns:
+            ndarray: The normalized audio data.
+        """
         normalized_data: ndarray = np.zeros_like(data)
         for i, file in enumerate(data):
             min_file: float = np.min(file)
@@ -210,6 +382,11 @@ class AudioData():
         return normalized_data
     
     def __repr__(self) -> str:
+        """Represent the AudioData object.
+
+        Returns:
+            str: A string representation of the AudioData object.
+        """
         base = f"AudioData(sr={self.sr} Hz)"
         details = []
         
@@ -237,8 +414,22 @@ class AudioData():
 
 class NPData():
     def __init__(self, data: (ndarray | None) = None) -> None:
+        """Numpy Array Data Container
+
+        Args:
+            data (ndarray  |  None, optional): Numpy array data. Defaults to None.
+        """
         self.data = data
     def save_training_data(self, path: str, data: (ndarray | None) = None) -> None:
+        """Save training data to a file.
+
+        Args:
+            path (str): The path to the file to save the data.
+            data (ndarray  |  None, optional): The data to save. Defaults to None.
+
+        Raises:
+            ValueError: If no data is available to save.
+        """
         if data is None and self.data is None:
             raise ValueError("No data to save")
         data = data if data else self.data
@@ -248,6 +439,15 @@ class NPData():
         logger.light_debug(f"Saved ndarray to:{path}")
 
     def load_training_data(self, path: str) -> ndarray:
+        """
+        Load training data from a file.
+
+        Args:
+            path (str): The path to the file to load the data from.
+
+        Returns:
+            ndarray: The loaded data.
+        """
         if not path.endswith(".npy"):
             path += ".npy"
         self.data: ndarray= np.load(path)
@@ -256,8 +456,18 @@ class NPData():
 
 class OS():
     def __init__(self) -> None:
-        pass
+        """Operating System Utilities"""
+        ...
     def get_filenames_from_folder(self, path: str, filetype: str = None) -> list:
+        """Get a list of filenames from a folder.
+
+        Args:
+            path (str): The path to the folder.
+            filetype (str, optional): The file extension to filter by. Defaults to None.
+
+        Returns:
+            list: A list of filenames in the folder.
+        """
         if filetype != None:
             files: list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f)) and f.endswith(filetype)]
         else:
@@ -266,10 +476,24 @@ class OS():
         return files
     
     def path_to_remote_path(self, path: str, is_remote: bool = False) -> bool:
+        """Convert a local path to a remote path .
+
+        Args:
+            path (str): The local path to convert.
+            is_remote (bool, optional): Whether the path is already a remote path. Defaults to False.
+
+        Returns:
+            bool: True if the path was converted to a remote path, False otherwise.
+        """
         if is_remote: return path[3:]
         else: return path
     
     def del_if_exists(self, path: str) -> None:
+        """Delete a file if it exists.
+
+        Args:
+            path (str): The path to the file to delete.
+        """
         if os.path.exists(path):
             os.remove(path)
             logger.light_debug(f"{path} deleted")
@@ -278,6 +502,13 @@ class OS():
 
 class ModelData():
     def __init__(self, dataset: (Dataset | None) = None, data: (ndarray | None) = None, labels: (ndarray | None) = None) -> None:
+        """Creates a ModelData instance for managing audio data and labels.
+
+        Args:
+            dataset (Dataset  |  None, optional): The dataset object containing audio data. Defaults to None.
+            data (ndarray  |  None, optional): The audio data array. Defaults to None.
+            labels (ndarray  |  None, optional): The corresponding labels for the audio data. Defaults to None.
+        """
         self.data = data
         self.labels = labels
         self.val_data, self.val_labels = None, None
@@ -285,6 +516,14 @@ class ModelData():
         self.train_dataset, self.val_dataset = dataset, None
     
     def load_data_from_path(self, data_path: str, label_path: (str | None) = None, shuffle: bool = True, random_seed: int = 567) -> None:
+        """Loads audio data and labels from the specified file paths.
+
+        Args:
+            data_path (str): The file path to the audio data.
+            label_path (str  |  None, optional): The file path to the audio labels. Defaults to None.
+            shuffle (bool, optional): Whether to shuffle the data. Defaults to True.
+            random_seed (int, optional): The random seed for shuffling. Defaults to 567.
+        """
         data = NPData().load_training_data(data_path)
         labels = NPData().load_training_data(label_path) if label_path else None
         if shuffle == True:
@@ -298,6 +537,14 @@ class ModelData():
             self.labels = labels if labels else data
 
     def load_data(self, data: ndarray, labels: (ndarray | None) = None, shuffle: bool = True, random_seed: int = 567) -> None:
+        """Loads audio data and labels into the ModelData instance.
+
+        Args:
+            data (ndarray): The audio data array.
+            labels (ndarray | None, optional): The corresponding labels for the audio data. Defaults to None.
+            shuffle (bool, optional): Whether to shuffle the data. Defaults to True.
+            random_seed (int, optional): The random seed for shuffling. Defaults to 567.
+        """
         if shuffle == True:
             np.random.seed(random_seed)
             indicies: ndarray = np.arange(data.shape[0])
@@ -307,27 +554,60 @@ class ModelData():
         else:
             self.data = data
             self.labels = labels if labels else data
-    
-    def create_validation_split(self, n_data_samples: (int | None) = None) -> None:
+
+    def create_validation_split(self, n_data_samples: int | None = None) -> None:
+        """Creates a validation split from the training data.
+
+        Args:
+            n_data_samples (int | None, optional): The number of training samples to use.
+                If None, uses the full dataset. Validation is always 5% of chosen data.
+        """
         n_samples = len(self.data)
-        if n_data_samples is not None and int(n_data_samples * 0.05) + n_data_samples <= n_samples:
-            n_validation_samples = int(n_data_samples * 0.05)
-        else:
+
+        if n_data_samples is None or n_data_samples > n_samples:
             n_data_samples = n_samples
-            n_validation_samples = int(n_data_samples * 0.05)
-            n_data_samples -= n_validation_samples
-        indicies: ndarray = np.arange(self.data.shape[0])
-        val_indicies = np.random.choice(indicies, size=n_validation_samples, replace = False)
-        data, labels = self.data, self.labels
-        self.val_data, self.val_labels = data[val_indicies], labels[val_indicies]
-        self.train_data, self.train_labels = np.delete(data, val_indicies, axis=0)[:n_data_samples], np.delete(labels, val_indicies, axis=0)[:n_data_samples]
+
+        n_validation_samples = max(1, int(n_data_samples * 0.05))
+        n_train_samples = n_data_samples - n_validation_samples
+
+        indices = np.arange(n_samples)
+        val_indices = np.random.choice(indices, size=n_validation_samples, replace=False)
+        train_indices = np.setdiff1d(indices, val_indices)[:n_train_samples]
+
+        self.val_data, self.val_labels = self.data[val_indices], self.labels[val_indices]
+        self.train_data, self.train_labels = self.data[train_indices], self.labels[train_indices]
+
         
     def create_datasets(self, data_type: torch.dtype = torch.float32) -> tuple[Dataset, (Dataset | None)]:
+        """Creates the training and validation datasets.
+
+        Args:
+            data_type (torch.dtype, optional): The data type for the audio tensors. Defaults to torch.float32.
+
+        Returns:
+            tuple: A pair (train_dataset, validation_dataset).
+                The second element may be None if no validation set is created.
+
+        """
         self.train_dataset = AudioDataset(self.train_data, self.train_labels, data_type=data_type)
         self.val_dataset = AudioDataset(self.val_data, self.val_labels, data_type=data_type) if self.val_data is not None else None
         return self.train_dataset, self.val_dataset
 
     def create_dataloaders(self, batch_size: int, shuffle: bool = False, num_workers: int = 1) -> tuple[DataLoader, (DataLoader | None)]:
+        """Creates the training and validation dataloaders.
+
+        Args:
+            batch_size (int): The batch size for the dataloaders.
+            shuffle (bool, optional): Whether to shuffle the training data. Defaults to False.
+            num_workers (int, optional): The number of worker processes for data loading. Defaults to 1.
+
+        Returns:
+            tuple: A pair (train_dataloader, validation_dataloader).
+                    The second element may be None if no validation set is created.
+
+        Raises:
+            ValueError: If no train dataset is defined.
+        """
         if self.train_dataset is None:
             raise ValueError("No train dataset defined")
         self.train_dataloader = DataLoader(dataset=self.train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
@@ -336,6 +616,13 @@ class ModelData():
 
 class AudioDataset(Dataset):
     def __init__(self, data: (ndarray | Tensor), labels: (ndarray | Tensor | None) = None, data_type: torch.dtype = torch.float32) -> None:
+        """Creates a Dataset for audio data.
+
+        Args:
+            data (ndarray  |  Tensor): The audio data.
+            labels (ndarray  |  Tensor  |  None, optional): The corresponding labels for the audio data. Defaults to None.
+            data_type (torch.dtype, optional): The data type for the audio tensors. Defaults to torch.float32.
+        """
         if type(data) is not  Tensor:
             data: Tensor = torch.tensor(data)
         if type(labels) is not Tensor and labels is not None:
@@ -354,6 +641,15 @@ class TrainingUtils():
     def __init__(self) -> None:
         ...
     def random_crop_batch(self, audio: Tensor, seq_len: int) -> Tensor:
+        """Randomly crop each item in abatch of audio tensors to a specified sequence length.
+
+        Args:
+            audio (Tensor): The input audio tensor.
+            seq_len (int): The desired sequence length.
+
+        Returns:
+            Tensor: The cropped audio tensor.
+        """
         if audio.ndim == 2:
             audio = audio.unsqueeze(1)
         B, C, L = audio.shape
@@ -367,14 +663,46 @@ class TrainingUtils():
         return torch.gather(audio, 2, indices)
     
     def mse(self, a: Tensor, b: Tensor) -> float:
+        """Compute the Mean Squared Error (MSE) between two tensors.
+
+        Args:
+            a (Tensor): The first tensor.
+            b (Tensor): The second tensor.
+
+        Returns:
+            float: The MSE between the two tensors.
+        """
         return nn.functional.mse_loss(a, b).item()
 
     def snr_db(self, ref: Tensor, est: Tensor) -> float:
+        """Compute the Signal-to-Noise Ratio (SNR) in dB.
+
+        Args:
+            ref (Tensor): The reference (clean) audio signal.
+            est (Tensor): The estimated (noisy) audio signal.
+
+        Returns:
+            float: The SNR in dB.
+        """
+
         num = torch.sum(ref.float() ** 2).item()
         err = torch.sum((ref.float() - est.float()) ** 2).item() + 1e-12
         return 10.0 * np.log10(num / err) if err > 0 else float("inf")
 
-    def diagnostics_v_obj(self, diffusion, u_net: nn.Module, val_dataloader: DataLoader, num_samples: int = 4, len_sample: int = 2**18, sigma_list: list[float] = [0.05, 0.25, 0.5], downsample_plot: int = 16,show_spectrogram: bool = False):
+    def diagnostics_v_obj(self, diffusion, u_net: nn.Module, val_dataloader: DataLoader, num_samples: int = 4, len_sample: int = 2**18, sigma_list: list[float] = [0.05, 0.25, 0.5], downsample_plot: int = 16) -> dict:
+        """Visualize and Analyze the denoising process of the model.
+
+        Args:
+            diffusion (_type_): The Diffusion Model.
+            u_net (nn.Module): The U-Net model for denoising.
+            val_dataloader (DataLoader): DataLoader for the validation dataset.
+            num_samples (int, optional): Number of samples to visualize. Defaults to 4.
+            len_sample (int, optional): Length of the audio samples. Defaults to 2**18.
+            sigma_list (list[float], optional): List of noise levels to analyze. Defaults to [0.05, 0.25, 0.5].
+            downsample_plot (int, optional): Factor by which to downsample the plot. Defaults to 16.
+        Returns:
+            dict: A dictionary containing the diagnostic results.
+        """
         u_net.eval()
         diagnostics: dict = {}
 
@@ -478,6 +806,11 @@ class TrainingUtils():
         return diagnostics
 
     def visualize_audio_and_spect(self, audio: ndarray) -> None:
+        """Visualize audio waveform and spectrogram.
+
+        Args:
+            audio (ndarray): Input audio array.
+        """
         if audio.ndim == 3:
             audio = audio[0][0]
         elif audio.ndim == 2:
@@ -500,10 +833,31 @@ class TrainingUtils():
         plt.tight_layout()
         plt.show()
 
-
+    def count_params(self, model: nn.Module) -> str:
+        """Counts all parameters of NN module. 
+        Args:
+            model (nn.Module, optional): A torch nn.Module.
+        Returns:
+            str: Number of parameters, rounded and with suffix eg. ~5.34M.
+        """
+        suffixes: dict = {1e9:"B", 1e6:"M", 1e3:"k", 1e0:""}
+        n =  sum(p.numel() for p in model.parameters() if p.requires_grad)
+        for key, val in suffixes.items():
+            if n / key > 1:
+                n = round(n / key, 3)
+                return f"~{str(n)[:5]}{val}"
 
 class PQMF(nn.Module):
+    """Pseudo-Quadrature Mirror Filter (PQMF) implementation."""
     def __init__(self, N: int, taps: int, beta: float, device: str = "cpu" ) -> None:
+        """Pseudo-Quadrature Mirror Filter (PQMF) initialization.
+
+        Args:
+            N (int): Number of subbands.
+            taps (int): Number of filter taps.
+            beta (float): Kaiser window beta parameter.
+            device (str, optional): Device to run the model on. Defaults to "cpu".
+        """
         super().__init__()
         self.N = N
         self.M = taps if taps % 2 == 0 else taps + 1
@@ -529,6 +883,14 @@ class PQMF(nn.Module):
         self.register_buffer("synthesis_filter", h_torch.clone())
 
     def analysis(self, x: Tensor) -> Tensor:
+        """Applies the analysis filter bank to the input signal.
+
+        Args:
+            x (Tensor): Input tensor of shape (B, 1, L).
+
+        Returns:
+            Tensor: Output tensor of shape (B, N, L').
+        """
         if x.ndim == 2:
             x = x.unsqueeze(1)
         B, C, L = x.shape
@@ -538,13 +900,30 @@ class PQMF(nn.Module):
         return y
 
     def synthesis(self, subbands: Tensor, length: int | None = None) -> Tensor:
-        w = self.synthesis_filter  # (N,1,M)
+        """Synthesizes the full-band signal from subband signals.
+
+        Args:
+            subbands (Tensor): Input tensor of shape (B, N, L').
+            length (int | None, optional): Output length. Defaults to None.
+
+        Returns:
+            Tensor: Output tensor of shape (B, 1, L).
+        """
+        w = self.synthesis_filter
         x_p = F.conv_transpose1d(subbands, w, stride=self.N, padding=self.pad)
         if length is not None:
             x_p = x_p[..., :length]
         return x_p
     
     def reconstruct_bands(self, x: Tensor) -> Tensor:
+        """Reconstructs individual band signals from the full-band input.
+
+        Args:
+            x (Tensor): Input tensor of shape (B, 1, L).
+
+        Returns:
+            Tensor: Output tensor of shape (B, N, L').
+        """
         subbands = self.analysis(x)
         B, N, _ = subbands.shape
         L = x.shape[-1]
@@ -557,11 +936,24 @@ class PQMF(nn.Module):
         return torch.stack(band_signals, dim=1)
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        """Convenience method for forward pass.
+
+        Args:
+            x (Tensor): Input tensor of shape (B, 1, L).
+
+        Returns:
+            tuple[Tensor, Tensor]: Tuple containing the subband signals and the reconstructed signal.
+        """
         sub = self.analysis(x)
         rec = self.synthesis(sub, length=x.shape[-1])
         return sub, rec
 
     def _build_diag_synthesis_weight(self) -> Tensor:
+        """Builds the diagonal synthesis weight tensor.
+
+        Returns:
+            Tensor: Diagonal synthesis weight tensor of shape (N, N, M).
+        """
         N, M = self.N, self.M
         W = torch.zeros(N, N, M, dtype=self.synthesis_filter.dtype, device=self.synthesis_filter.device)
         for i in range(N):
@@ -570,6 +962,15 @@ class PQMF(nn.Module):
 
     @torch.no_grad()
     def synthesize_bands(self, subbands: Tensor, length: int | None = None) -> Tensor:
+        """Synthesizes the full-band signal from subband signals.
+
+        Args:
+            subbands (Tensor): Input tensor of shape (B, N, L').
+            length (int | None, optional): Output length. Defaults to None.
+
+        Returns:
+            Tensor: Output tensor of shape (B, 1, L).
+        """
         if not hasattr(self, "_synth_diag") or self._synth_diag.shape[0] != self.N:
             self._synth_diag = self._build_diag_synthesis_weight()
         y = F.conv_transpose1d(subbands, self._synth_diag, stride=self.N, padding=self.pad)
@@ -579,11 +980,32 @@ class PQMF(nn.Module):
 
     @torch.no_grad()
     def synthesize_single_band(self, subbands: Tensor, k: int, length: int | None = None) -> Tensor:
+        """Synthesizes a single band from the subband signals.
+
+        Args:
+            subbands (Tensor): Input tensor of shape (B, N, L').
+            k (int): Index of the band to synthesize.
+            length (int | None, optional): Output length. Defaults to None.
+
+        Returns:
+            Tensor: Output tensor of shape (B, 1, L).
+        """
         y_all = self.synthesize_bands(subbands, length=length)
         return y_all[:, k:k+1, :]
 
     @torch.no_grad()
     def synthesize_selected(self, subbands: Tensor, indices: list[int], length: int | None = None, reduce: bool = True) -> Tensor:
+        """Synthesizes selected bands from the subband signals.
+
+        Args:
+            subbands (Tensor): Input tensor of shape (B, N, L').
+            indices (list[int]): List of band indices to synthesize.
+            length (int | None, optional): Output length. Defaults to None.
+            reduce (bool, optional): Whether to reduce the output. Defaults to True.
+
+        Returns:
+            Tensor: Output tensor of shape (B, 1, L) if reduce is True, else (B, len(indices), L).
+        """
         y_all = self.synthesize_bands(subbands, length=length)
         y_sel = y_all[:, indices, :]
         if reduce:
@@ -592,6 +1014,12 @@ class PQMF(nn.Module):
 
     @torch.no_grad()
     def test_pqmf(self, audio_batch: Tensor, num_examples: int = 2) -> None:
+        """Tests the PQMF layer.
+
+        Args:
+            audio_batch (Tensor): Input audio batch of shape (B, 1, L).
+            num_examples (int, optional): Number of examples to visualize. Defaults to 2.
+        """
         logger.info(f"Input batch: {audio_batch.shape}")
 
         subbands = self.analysis(audio_batch)
@@ -635,6 +1063,13 @@ class PQMF(nn.Module):
 
 class Filterbank(nn.Module):
     def __init__(self, freq_edges: list, taps: int, sample_rate: int) -> None:
+        """Filterbank initialization.
+
+        Args:
+            freq_edges (list): List of frequency edges for the filterbank.
+            taps (int): Number of taps for the FIR filters.
+            sample_rate (int): Sample rate of the input audio.
+        """
         super().__init__()
         self.freq_edges = freq_edges
         self.taps = taps
@@ -659,6 +1094,14 @@ class Filterbank(nn.Module):
         self.pad = taps // 2
 
     def analysis(self, x: Tensor) -> Tensor:
+        """Performs analysis on the input audio tensor.
+
+        Args:
+            x (Tensor): Input audio tensor of shape (B, 1, L).
+
+        Returns:
+            Tensor: Audio bands tensor of shape (B, N, L).
+        """
         if x.ndim == 2:
             x = x.unsqueeze(1)
         B, C, L = x.shape
@@ -671,6 +1114,15 @@ class Filterbank(nn.Module):
         return torch.cat(bands, dim=1)
 
     def synthesis(self, bands: Tensor, length: int = None) -> Tensor:
+        """Synthesizes the audio from the given bands.
+
+        Args:
+            bands (Tensor): Audio bands tensor of shape (B, N, L).
+            length (int, optional): Length of the output tensor. Defaults to None.
+
+        Returns:
+            Tensor: Synthesized audio tensor of shape (B, 1, L) or (B, 1, length) if length is specified.
+        """
         x_rec = bands[:,0:1,:]
         for n in range(1, self.N):
             x_rec = x_rec + bands[:,n:n+1,:]
@@ -680,17 +1132,47 @@ class Filterbank(nn.Module):
 
     @torch.no_grad()
     def synthesize_bands(self, bands: Tensor, length: int = None) -> Tensor:
+        """Synthesizes the audio from the given bands.
+
+        Args:
+            bands (Tensor): Audio bands tensor of shape (B, N, L).
+            length (int, optional): Length of the output tensor. Defaults to None.
+
+        Returns:
+            Tensor: Synthesized audio tensor of shape (B, 1, L) or (B, 1, length) if length is specified.
+        """
         if length is not None and bands.shape[-1] != length:
             return F.interpolate(bands, size=length, mode="linear", align_corners=False)
         return bands
 
     @torch.no_grad()
     def synthesize_single_band(self, bands: Tensor, k: int, length: int = None) -> Tensor:
+        """Synthesizes a single audio band.
+
+        Args:
+            bands (Tensor): Audio bands tensor of shape (B, N, L).
+            k (int): Index of the band to synthesize.
+            length (int, optional): Length of the output tensor. Defaults to None.
+
+        Returns:
+            Tensor: Synthesized audio tensor of shape (B, 1, L) or (B, 1, length) if length is specified.
+        """
         y_all = self.synthesize_bands(bands, length=length)
         return y_all[:, k:k+1, :]
 
     @torch.no_grad()
     def synthesize_selected(self, bands: Tensor, indices: list[int], length: int = None, reduce: bool = True) -> Tensor:
+        """Synthesizes the selected audio bands.
+
+        Args:
+            bands (Tensor): Audio bands tensor of shape (B, N, L).
+            indices (list[int]): List of indices of the bands to synthesize.
+            length (int, optional): Length of the output tensor. Defaults to None.
+            reduce (bool, optional): Whether to reduce the output tensor by summing the selected bands. Defaults to True.
+
+        Returns:
+            Tensor: Synthesized audio tensor of shape (B, 1, L) or (B, 1, length) if length is specified.
+        """
         y_all = self.synthesize_bands(bands, length=length)
         y_sel = y_all[:, indices, :]
         if reduce:
@@ -698,7 +1180,13 @@ class Filterbank(nn.Module):
         return y_sel
 
     @torch.no_grad()
-    def test_filterbank(self, audio_batch: Tensor, num_examples: int = 2):
+    def test_filterbank(self, audio_batch: Tensor, num_examples: int = 2) -> None:
+        """Tests the filter bank by performing analysis and synthesis on the input audio.
+
+        Args:
+            audio_batch (Tensor): Input audio batch of shape (B, 1, L).
+            num_examples (int, optional): Number of examples to test. Defaults to 2.
+        """
         subbands = self.analysis(audio_batch)
         recon = self.synthesis(subbands, length=audio_batch.shape[-1])
         bands_up = self.synthesize_bands(subbands, length=audio_batch.shape[-1])
@@ -731,269 +1219,24 @@ class Filterbank(nn.Module):
         diff = (recon - sum_bands).abs().max().item()
         logger.info(f"Max |recon - sum(bands)| = {diff:.2e}")
 
-
-
-def flatten(data: ndarray) -> ndarray:
-    """Flattens a 3D (N,H,W) to 2d (N,H*W).
-
-    Args:
-        data (ndarray): Array to flatten.
-
-    Returns:
-        ndarray: Flattened array.
-    """
-    N, H, W = data.shape
-    output: ndarray = np.zeros((N, H * W))
-    for i, file in enumerate(data):
-        output[i] = file.flatten()
-    return output
-
-
-# Visualize Data
-def scatter_plot(data_x: ndarray, data_y: ndarray = None, x_label: str = "Epoch", y_label: str = "Lr", color: str = "blue", switch_x_y: bool = True) -> None:
-    """Visualizes data as a scatterplot.
-
-    Args:
-        data_x (ndarray): X data.
-        data_y (ndarray, optional): Y data. If not given numerates X. Defaults to None.
-        x_label (str, optional): X-Axis label. Defaults to "Epoch".
-        y_label (str, optional): Y-Axis label. Defaults to "Lr".
-        color (str, optional): Color of the plot. Defaults to "blue".
-        switch_x_y (bool, optional): If true switches x and y axis. Defaults to True.
-    """
-    if data_y is None:
-        data_y = np.arange(len(data_x))
-    if switch_x_y:
-        plt.scatter(data_y, data_x, c=color)
-        plt.xlabel = y_label
-        plt.ylabel = x_label
-    else:
-        plt.scatter(data_x, data_y, c=color)
-        plt.xlabel = x_label
-        plt.ylabel = y_label
-    plt.show()
-
-def visualize_spectrogram(spectrogram: ndarray, sr: int = 44100, len_fft: int = 4096) -> None:
-    """Plots a spectrogram.
-
-    Args:
-        spectrogram (ndarray): spectrogram.
-        sr (int, optional): Sample rate. Defaults to 44100.
-        len_fft (int, optional): STFT FTT length. Defaults to 4096.
-    """
-    plt.figure(figsize=(10, 4))
-    librosa.display.specshow(spectrogram, sr=sr, n_fft=len_fft)
-    plt.show()
-
-
-# Torch utils
-def count_parameters(model: nn.Module) -> str:
-    """Counts all parameters of NN module. 
-
-    Args:
-        model (nn.Module): A torch nn.Module.
-    Returns:
-        int: Number of parameters.
-    """
-    suffixes: dict = {1e9:"B", 1e6:"M", 1e3:"k", 1e0:""}
-    n =  sum(p.numel() for p in model.parameters() if p.requires_grad)
-    for key, val in suffixes.items():
-        if n / key > 1:
-            n = round(n / key, 3)
-            return f"~{str(n)[:5]}{val}"
-
-def generate_latent_repr(vq_vae: nn.Module, data: Dataset, batch_size: int = 24, device: str = "cpu") -> Dataset:
-    data_loader = DataLoader(data, batch_size=batch_size)
-    converted_data = []
-    vq_vae.eval()
-    for b,_ in (data_loader):
-        _, q_z, _, _ = vq_vae(b.unsqueeze(1).to(device))
-        converted_data.append(q_z)
-    vq_vae.train()
-    new_data = torch.cat(converted_data, dim=0)
-    return AudioDataset(new_data, data_type=torch.long)
-
-class DiffusionTrainer_depr():
-    def __init__(self, model: nn.Module, optimizer: Optimizer = None, lr_scheduler: _LRScheduler = None, device: str = "cpu", embed_fun: Callable | None = None, embed_dim: int | None = None, n_dims: int = 1)-> None:
-        self.model = model
-        self.optimizer = optimizer
-        self.lr_scheduler = lr_scheduler
-        self.device = device
-        self.embed_fun = embed_fun
-        self.embed_dim = embed_dim
-        self.n_dims = n_dims
-
-    def train(self, train_dataset: DataLoader, n_epochs: int, full_model_path: str, checkpoint_freq: int = 0, val_dataset: DataLoader = None, patience: int = -1, gradient_clip_norm: float| None = None, gradient_clip_val: float | None = None, sample_freq: int | None = None) -> tuple[list[float], list[float] | None]:
-        logger.info(f"Training started on {self.device}")
-        if self.device == "cuda":
-            self.scaler = torch.cuda.amp.GradScaler() #This is obsolete and the other version would work for cuda aswell, but paperspace does not support the other version yet
-        else:
-            self.scaler = torch.amp.GradScaler(device=self.device)
-        loss_list: list = []
-        val_loss_list: list = []
-        total_time: float = 0.0
-        best_loss = float('inf')
-        epochs_no_improve: int = 0
-
-        self.model.train()
-        for e in range(0, n_epochs):
-            total_loss: float = 0
-            validation_loss: float = 0
-            start_time: float = time.time()
-
-            for b_idx, (x, y) in enumerate(train_dataset):
-                self.optimizer.zero_grad()
-                if x.dim() == self.n_dims + 1:
-                    x = x.to(self.device).unsqueeze(1)
-                else:
-                    x = x.to(self.device)
-                with torch.autocast(device_type=self.device):
-                    loss = self.model(x)
-
-                loss.backward()
-
-                total_loss += loss.item()
-                if np.isnan(loss.item()):
-                    logger.info("Breaking due to NaN loss.")
-                    break
-
-                if gradient_clip_norm is not None:
-                    nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_norm)
-                if gradient_clip_val is not None:
-                    nn.utils.clip_grad_value_(self.model.parameters(), gradient_clip_val)
-                
-                self.optimizer.step()
-
-                if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                    current_batch = b_idx + 1
-                    all_params = torch.cat([param.view(-1) for param in self.model.parameters()])
-                    print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')},000 - LIGHT_DEBUG - Batch {current_batch:03d}/{len(train_dataset):03d} Loss: {loss.item():.3f} Min/Max params: {torch.min(all_params):.3f}, {torch.max(all_params):.3f}", end='', flush=True)
-            else:
-                if logger.getEffectiveLevel() == LIGHT_DEBUG:
-                    print(flush=True)
-
-                if val_dataset is not None:
-                    self.model.eval()
-                    for (x, y) in val_dataset:
-                        if x.dim() == self.n_dims + 1:
-                            x = x.to(self.device).unsqueeze(1)
-                        else:
-                            x = x.to(self.device)
-                        with torch.no_grad():
-                            loss = self.model(x)
-                            validation_loss += loss.item()
-                    validation_loss = validation_loss / len(val_dataset)
-                    val_loss_list.append(validation_loss)
-                    self.model.train()
-
-                avg_loss = total_loss / len(train_dataset)
-                loss_list.append(avg_loss)
-
-                if self.lr_scheduler is not None:
-                    if isinstance(self.lr_scheduler, (optim.lr_scheduler.ReduceLROnPlateau)):
-                        self.lr_scheduler.step(avg_loss)
-                    else:
-                        self.lr_scheduler.step()
-
-                if patience > 0:
-                    if avg_loss < best_loss:
-                        epochs_no_improve = 0
-                        best_loss = avg_loss
-                    else:
-                        epochs_no_improve += 1
-                
-                if epochs_no_improve >= patience and patience != -1:
-                    logger.info(f"Early stopping at epoch {e + 1}: Loss has not improved for {patience} epochs")
-                    break
-                
-                if sample_freq is not None and (e + 1) % sample_freq == 0:
-                    x, _ = next(iter(train_dataset))
-                    if x.dim() == self.n_dims + 1:
-                        x = x.unsqueeze(1)
-                    c, h, w = x.shape[-3], x.shape[-2], x.shape[-1]
-                    if self.n_dims == 2:
-                        self.sample(2, [2, c, h, w], 10, True)
-                    else:
-                        self.sample(2,[2, h, w], 10, True)
-                epoch_time = time.time() - start_time
-                total_time += epoch_time
-                remaining_time = int((total_time / (e + 1)) * (n_epochs - e - 1))
-                val_loss_str = f" Avg. val. Loss: {validation_loss:.5e}" if val_dataset is not None else ""
-
-                logger.info(f"Epoch {e + 1:03d}: Avg. Loss: {avg_loss:.5e}{val_loss_str} Remaining Time: {remaining_time // 3600:02d}h {(remaining_time % 3600) // 60:02d}min {round(remaining_time % 60):02d}s LR: {self.optimizer.param_groups[0]['lr']:.5e} ")
-                
-                if checkpoint_freq > 0 and (e + 1) % checkpoint_freq == 0:
-                    checkpoint_path: str = f"{full_model_path[:-4]}_epoch_{e + 1:03d}.pth"
-                    torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, checkpoint_path)
-                    if e + 1 != checkpoint_freq:
-                        last_path: str = f"{full_model_path[:-4]}_epoch_{(e + 1) - checkpoint_freq:03d}.pth"
-                        OS().del_if_exists(last_path)
-                    logger.light_debug(f"Checkpoint saved model to {checkpoint_path}")
-                continue
-            break
-
-
-        torch.save({"model": self.model.state_dict(), "optim": self.optimizer.state_dict(), "scheduler": self.lr_scheduler.state_dict(), "epoch": e + 1}, full_model_path)
-
-        logger.light_debug(f"Saved model to {full_model_path}")
-
-        if checkpoint_freq > 0:
-            checkpoint_path: str = f"{full_model_path[:-4]}_epoch_{e + 1 - ((e + 1) % checkpoint_freq):03d}.pth"
-            OS().del_if_exists(checkpoint_path)
-        
-        return loss_list, val_loss_list
+class NetworkUtils():
+    def __init__(self, netowrk: nn.Module) -> None:
+        self.module = netowrk
     
-    def _convert_to_item_list(self, x: Tensor) -> ndarray:
-        if x.ndim == 4:
-            x = torch.squeeze(x, 1)
-        return x.cpu().numpy()
-    
-    def save_architecture(self, tensor_dim: list, path: str) -> None:
-        self.model.eval()
-        with torch.no_grad():
-            example_x = torch.randn(*tensor_dim).to(self.device)
-            script_model = torch.jit.trace(self.model,example_x, check_trace=False)
-        torch.jit.save(script_model, path)
-        self.model.train()
-    
-    def sample(self, n_samples: int, tensor_dim: list, n_steps: int = 20, visualize: bool = False) -> ndarray:
-        if self.n_dims == 2:
-            noise = torch.randn(n_samples, tensor_dim[-3], tensor_dim[-2], tensor_dim[-1]).to(self.device)
-        else:
-            noise = torch.randn(n_samples, tensor_dim[-2], tensor_dim[-1]).to(self.device)
-        self.model.eval()
-        samples = self._convert_to_item_list(self.model.sample(noise, num_steps=n_steps))
-        samples = AudioData().normalize(samples, -1, 1)
-        self.model.train()
-        if visualize:
-            self.visualize_samples(samples)
-        return samples
-    
-    def sample_voc(self, spec: ndarray, n_steps: int = 20) -> ndarray:
-        if spec.ndim == 2:
-            spec = np.reshape(spec, [1, 1, spec.shape[-2], spec.shape[-1]])
-        if spec.ndim == 3:
-            spec = np.reshape(spec, [spec.shape[0], 1, spec.shape[-2], spec.shape[-1]])
-        spec = torch.tensor(spec)
-        wave = self.model.sample(spec, num_steps=n_steps)
-        return wave.cpu().numpy()
-    
-    def sample_AE(self, seed: ndarray, n_steps: int = 20) -> ndarray:
-        if seed.ndim == 2:
-            seed = np.reshape(seed, [seed.shape[0], 1, seed.shape[1]])
-        elif seed.ndim == 1:
-            seed = np.reshape(seed, [1, 1, seed.shape[0]])
-        seed = torch.tensor(seed).to(self.device)
-        latent = self.model.encode(seed)
-        sample = self.model.decode(latent, num_steps=n_steps).cpu().numpy()
-        return sample
+    def count_params(self, network: nn.Module | None) -> str:
+        """Counts all parameters of NN module. 
+        Args:
+            network (nn.Module, optional): A torch nn.Module.
+        Returns:
+            str: Number of parameters, rounded and with suffix eg. ~5.34M.
+        """
+        model = network if network else self.module
+        suffixes: dict = {1e9:"B", 1e6:"M", 1e3:"k", 1e0:""}
+        n =  sum(p.numel() for p in model.parameters() if p.requires_grad)
+        for key, val in suffixes.items():
+            if n / key > 1:
+                n = round(n / key, 3)
+                return f"~{str(n)[:5]}{val}"
 
-    def visualize_samples(self, samples: ndarray) -> None:
-        for sample in samples:
-            visualize_spectrogram(OS().normalize(sample, -1, 1), sr=32000)
-    
-    def save_samples(self, samples: ndarray, file_path_name: str, sr: int = 32000, len_fft: int = 480, len_hop: int = 288) -> None:
-        for i, sample in enumerate(samples):
-            audio = AudioData().spectrogram_to_audio(OS().normalize(sample, -50, 50), len_fft, len_hop)
-            AudioData().save_audio_file(audio, f"{file_path_name}_{i:02d}.wav", sr=sr)
+
 

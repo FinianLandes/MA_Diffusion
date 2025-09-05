@@ -28,6 +28,9 @@
 | >10.06.2025 | Getting some results. Trying to optimize hyperparams using optuna. sevcondly trying to train an upsampler for the diffusion model. | |
 | >17.06.2025 | Implemented HiFiGAN which gets me better results as melGAN trying to train the diffusion more to produce better spectrograms and also trying to train an enhancer working on the waveform for HiFiGAN to possibly remove the current aliasing. | |
 | >06.07.2025 | tried the same models using the maestro dataset to rule out dataset issues. This resulted in even worse outputs.| Will refactor the utils code so it is more sorted so will create a tag at this stage if older files want to be tested. |
+| >10.08.2025 | Some diffusion tests with Audiodiffusion Pytorch| |
+| >25.08.2025 | VAE, VQ-VAE + Transformer| |
+| >04.09.2025 | Wave Diffusion | |
 
 ## General Info
 
