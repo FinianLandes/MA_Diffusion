@@ -847,6 +847,49 @@ class TrainingUtils():
                 n = round(n / key, 3)
                 return f"~{str(n)[:5]}{val}"
 
+##############
+# Additional nn.Modules
+##############
+
+class MultiResolutionSTFTLoss(nn.Module):
+    def __init__(self, fft_sizes=(1024, 2048, 512), hop_sizes=(256, 512, 128), win_lengths=(1024, 2048, 512)):
+        """Multi-resolution STFT loss for comparing audio signals.
+
+        Args:
+            fft_sizes (tuple, optional): FFT sizes for STFT. Defaults to (1024, 2048, 512).
+            hop_sizes (tuple, optional): Hop sizes for STFT. Defaults to (256, 512, 128).
+            win_lengths (tuple, optional): Window lengths for STFT. Defaults to (1024, 2048, 512).
+        """
+        super().__init__()
+        self.fft_sizes = fft_sizes
+        self.hop_sizes = hop_sizes
+        self.win_lengths = win_lengths
+
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        """Forward pass for the multi-resolution STFT loss.
+
+        Args:
+            x (Tensor): Input tensor.
+            y (Tensor): Target tensor.
+
+        Returns:
+            Tensor: Computed loss.
+        """
+        loss = 0.0
+        for fft_size, hop_size, win_length in zip(self.fft_sizes, self.hop_sizes, self.win_lengths):
+            X = torch.stft(x.squeeze(1), n_fft=fft_size, hop_length=hop_size, win_length=win_length, window=torch.hann_window(win_length, device=x.device), return_complex=True)
+            Y = torch.stft(y.squeeze(1), n_fft=fft_size, hop_length=hop_size, win_length=win_length, window=torch.hann_window(win_length, device=y.device), return_complex=True)
+
+            mag_X = torch.abs(X)
+            mag_Y = torch.abs(Y)
+
+            sc_loss = torch.norm(mag_X - mag_Y, p=1) / torch.norm(mag_Y, p=1)
+            mag_loss = F.l1_loss(mag_X, mag_Y)
+
+            loss += sc_loss + mag_loss
+
+        return loss / len(self.fft_sizes)
+
 class PQMF(nn.Module):
     """Pseudo-Quadrature Mirror Filter (PQMF) implementation."""
     def __init__(self, N: int, taps: int, beta: float, device: str = "cpu" ) -> None:
@@ -1218,25 +1261,3 @@ class Filterbank(nn.Module):
         sum_bands = bands_up.sum(dim=1, keepdim=True)
         diff = (recon - sum_bands).abs().max().item()
         logger.info(f"Max |recon - sum(bands)| = {diff:.2e}")
-
-class NetworkUtils():
-    def __init__(self, netowrk: nn.Module) -> None:
-        self.module = netowrk
-    
-    def count_params(self, network: nn.Module | None) -> str:
-        """Counts all parameters of NN module. 
-        Args:
-            network (nn.Module, optional): A torch nn.Module.
-        Returns:
-            str: Number of parameters, rounded and with suffix eg. ~5.34M.
-        """
-        model = network if network else self.module
-        suffixes: dict = {1e9:"B", 1e6:"M", 1e3:"k", 1e0:""}
-        n =  sum(p.numel() for p in model.parameters() if p.requires_grad)
-        for key, val in suffixes.items():
-            if n / key > 1:
-                n = round(n / key, 3)
-                return f"~{str(n)[:5]}{val}"
-
-
-

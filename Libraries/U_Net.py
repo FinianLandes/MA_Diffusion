@@ -1,5 +1,5 @@
 import torch
-from torch import nn, Tensor, functional
+from torch import nn, Tensor
 import logging, math
 
 
@@ -7,6 +7,14 @@ logger = logging.getLogger(__name__)
 
 class ResBlock(nn.Module):
     def __init__(self, channels: int, t_embed: int,  kernel_size: int = 3, dilation: int = 1) -> None:
+        """Simple 1-D Residual Block.
+
+        Args:
+            channels (int): In/Out channels.
+            t_embed (int): Embedding dimension.
+            kernel_size (int, optional): Kernel size. Defaults to 3.
+            dilation (int, optional): Convolution dilation. Defaults to 1.
+        """
         super().__init__()
         pad = (kernel_size - 1) // 2 * dilation
 
@@ -27,6 +35,17 @@ class ResBlock(nn.Module):
 
 class UNet(nn.Module):
     def __init__(self, in_channels: int, n_layers: int, base_channels: int, embed_dim: int = 256, timesteps: int = 1000, v_obj_sampler: bool = True, kernel_size: int = 9) -> None:
+        """U-Net architecture for diffusion models.
+
+        Args:
+            in_channels (int): Number of input channels.
+            n_layers (int): Number of downsampling layers.
+            base_channels (int): Number of base channels *2 at each layer.
+            embed_dim (int, optional): Embedding dimension. Defaults to 256.
+            timesteps (int, optional): Number of timesteps, used for ddxm diffusion ignored when v-objective diffusion is used. Defaults to 1000.
+            v_obj_sampler (bool, optional): Whether to use v-objective diffusion. Defaults to True.
+            kernel_size (int, optional): Kernel size for convolutions. Defaults to 9.
+        """
         super().__init__()
         self.embed_dim = embed_dim
         self.T = timesteps
@@ -64,6 +83,15 @@ class UNet(nn.Module):
                                     )
 
     def time_embed(self, t: Tensor, embed_dim: int) -> Tensor:
+        """Compute sinusoidal embeddings for time steps.
+
+        Args:
+            t (Tensor): Timesteps.
+            embed_dim (int): Embedding dimension.
+
+        Returns:
+            Tensor: Sinusoidal embeddings.
+        """
         if t.ndim == 1:
             t = t[:, None]
         if not self.v_obj: #-> scale to 0,1 if int steps
@@ -78,6 +106,15 @@ class UNet(nn.Module):
 
     
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        """Forward pass for the U-Net.
+
+        Args:
+            x (Tensor): Input tensor.
+            t (Tensor): Timesteps.
+
+        Returns:
+            Tensor: Output tensor.
+        """
         t_emb = self.time_mlp(self.time_embed(t, self.embed_dim))
 
         skips = []

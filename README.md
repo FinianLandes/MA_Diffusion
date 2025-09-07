@@ -31,6 +31,7 @@
 | >10.08.2025 | Some diffusion tests with Audiodiffusion Pytorch| |
 | >25.08.2025 | VAE, VQ-VAE + Transformer| |
 | >04.09.2025 | Wave Diffusion | |
+| >04.09.2025 | 2h Architecture Diagram | |
 
 ## General Info
 
