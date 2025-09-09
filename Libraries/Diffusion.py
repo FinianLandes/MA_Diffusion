@@ -276,7 +276,7 @@ class Diffusion():
             return self.fb.synthesis(x, shape[-1]).cpu().numpy(), x.cpu().numpy()
         return x.cpu().numpy()
     
-    def bwd_diffusion_v_obj(self, model: nn.Module, shape: list, n_steps: int, seed: Tensor | None = None) -> ndarray:
+    def bwd_diffusion_v_obj(self, model: nn.Module, shape: list, n_steps: int, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> ndarray:
         """Backward diffusion process for v-diffusion.
 
         Args:
@@ -292,15 +292,19 @@ class Diffusion():
         model.eval()
 
         batch = shape[0]
-        if self.fb:
-            x = torch.randn((batch, self.fb.N, shape[-1]), device=self.device)
-        else:
-            x = torch.randn(shape, device=self.device)
-
-
         sigmas = torch.linspace(1.0, 0.0, n_steps + 1, device=self.device)
+        start_step = 0
+        if seed is not None:
+            a, b = self.get_semicircle_weights(sigmas[n_steps - seed_fwd_steps])
+            x = seed * a + b * torch.randn_like(seed)
+            start_step = n_steps - seed_fwd_steps
+        else:
+            if self.fb:
+                x = torch.randn((batch, self.fb.N, shape[-1]), device=self.device) 
+            else:
+                x = torch.randn(shape, device=self.device)
 
-        for i in range(n_steps):
+        for i in range(start_step, n_steps):
             sigma_t = sigmas[i]
             sigma_tp1 = sigmas[i+1]
 

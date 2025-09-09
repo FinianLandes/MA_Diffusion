@@ -38,35 +38,24 @@
 ### Directory Details
 
 - **Data**
-  - `datasets.npy` - Preprocessed dataset file (e.g., spectrograms).
+  - `datasets.npy` - Preprocessed dataset file
   - `music_file.wav` - Example audio file for processing.
 
 - **Libraries**
   - `Utils.py` - General utility functions and the Trainer class for the newer models.
-
-  The following are not used in the newer models anymore:
   - `U_Net.py` - U-Net architecture definition.
-  - `VAE.py` - Variational Autoencoder implementation.
   - `Diffusion.py` - Diffusion model implementation.
 
 - **MainScripts**
-  - `Conf.py` - Configuration settings.
   - `Preprocessing.ipynb` - Notebook for data preprocessing.
-  - `Diffusion.ipynb` - Notebook for a standard diffusion implementation.
-  - `Vocoder.ipynb` - Notebook for a Vocoder implementation.
-  - `Diffusion Autoencoder.ipynb` -Notebook containing a full diffusion autoencoder.
-
-  The Following files are no longer used:
-  - `Train Diffusion.ipynb` - Notebook for training the diffusion model.
-  - `Eval Diffusion.ipynb` - Notebook for evaluating the diffusion model.
-  - `Train VAE.ipynb` - Notebook for training the VAE.
-  - `Eval VAE.ipynb` - Notebook for evaluating the VAE.
+  - `Wave Diffusion.ipynb` - Notebook for traing the diffusion models.
+  - `Wave Diffusion Inference.ipynb` - Notebook for generating samples using diffusion and also to save the model architecture.
 
 - **Models**
   - Directory for saved model weights (e.g., `.pth` files).
 
 - **Results**
-  - Directory for experiment results and outputs (e.g., generated spectrograms, loss plots).
+  - Directory for experiment results and outputs.
 
 ### Prerequisits
 
@@ -79,9 +68,10 @@
   - `Librosa`: 0.10.2 (Depending on the python version might require `standard-sunau`, `standard-aifc` and `standard-chunk` which have been removed from the pre-installed libraries in newer python versions.)
   - `Matplotlib`: 3.10.0
   - `Soundfile`: 0.13.1
-  - `audio-diffusion-pytorch` : 0.1.3
-  - `audio-encoders-pytorch` : 0.0.22
-
+  - **Optional**
+    - `tensorboard`: 2.19.0
+    - `torchviz`: 0.0.3
+    - `torchinfo`: 1.8.0
 
 - **Pre-Installed Libraries**
   - `os`
@@ -90,17 +80,13 @@
   - `time`
   - `typing`
 
-### Neural Nets
-
-Inorder to view the Neural Nets Netron can be used with .pt files. Those files can be generated using the `save_architecture` function of the `Trainer` class by passing the size of an input tensor to it.
-
 ### Logging
 
 This codebase is based on the logging module. For the minimal output set logging level to `logging.INFO`. Due to the immense output of some libraries in `logging.DEBUG` mode i added a custom mode between `DEBUG` and `INFO`. Inorder to use this level which prints a lot of info in the custom implemented functions set debug level to `LIGHT_DEBUG`. This is defined in the `conf.py` file.
 
 ### Data
 
-The dataset is created in the preprocessing file. The Model is trained on 4.6s mono samples with a sample rate of 32Khz.
+The dataset is created in the preprocessing file. The Model is trained on 4.096s mono samples with a sample rate of 32Khz.
 
 ## Sources
 
