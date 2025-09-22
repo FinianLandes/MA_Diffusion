@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class Diffusion():
-    def __init__(self, noise_steps: int, schedule: str = "cosine", inp_shape: list = [12, 1, 262144], device: str = "cpu", filter: Filterbank | PQMF | None = None) -> None:
+    def __init__(self, noise_steps: int, schedule: str = "cosine", inp_shape: list = [12, 1, 262144], device: str = "cpu") -> None:
         """Diffusion Class containing all the functions necessary for diffusion models.
 
         Args:
@@ -16,10 +16,8 @@ class Diffusion():
             schedule (str, optional): The noise schedule to use is ignored if v-objective diffusion is used. Defaults to "cosine".
             inp_shape (list, optional): The input shape of the audio data. Defaults to [12, 1, 262144].
             device (str, optional): The device to run the model on. Defaults to "cpu".
-            filter (Filterbank | PQMF | None, optional): The filterbank to use if diffusion should run on different frequency bands. Defaults to None.
         """
         self.T = noise_steps
-        self.fb = filter
         self.device = device
         self.inp_shape = inp_shape
         self.beta = self.get_noise_schedule(schedule).to(self.device)[:, None, None]
@@ -115,8 +113,6 @@ class Diffusion():
         Returns:
             tuple[Tensor, ...]: The prepared input data.
         """
-        if self.fb:
-            inp = self.fb.analysis(inp)
         timesteps = self.get_sampling_timesteps(inp.shape[0])
         x_t, noise = self.noise_data(inp, timesteps)
         return x_t, noise, timesteps
@@ -135,8 +131,6 @@ class Diffusion():
         a, b = self.get_semicircle_weights(sigma_b)
         eps_hat = (v + b * x_sigma) / a
         x0_hat  = (a * eps_hat - v) / b
-        if self.fb:
-            x0_hat = self.fb.synthesis(x0_hat, self.inp_shape[-1])
         return x0_hat
 
     def get_semicircle_weights(self, sigma_t: Tensor) -> tuple[Tensor, ...]:
@@ -177,24 +171,23 @@ class Diffusion():
         Returns:
             tuple[Tensor, ...]: The prepared input data.
         """
-        if self.fb:
-            inp = self.fb.analysis(inp)
         sigma_t = torch.rand(inp.shape[0]).to(self.device)
         x_sigma_t, e = self.noise_img_v_obj(inp, sigma_t)
         a, b = self.get_semicircle_weights(sigma_t)
         true_vel = a * e - b * inp
         return true_vel, x_sigma_t, sigma_t
 
-    def bwd_diffusion_ddpm(self, model: nn.Module, shape: list, seed: Tensor | None = None) -> ndarray:
+    def bwd_diffusion_ddpm(self, model: nn.Module, shape: list, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> np.ndarray:
         """Backward diffusion process for DDPM.
 
         Args:
             model (nn.Module): The diffusion model.
             shape (list): The shape of the input tensor.
             seed (Tensor | None, optional): The seed tensor for initialization. Defaults to None.
+            seed_fwd_steps (int, optional): Number of forward diffusion steps to take on the seed. Defaults to 0.
 
         Returns:
-            ndarray: The generated samples.
+            np.ndarray: The generated samples.
         """
         logger.info(f"Started sampling {shape[0]} samples on {self.device}")
         
@@ -203,12 +196,22 @@ class Diffusion():
         timesteps = self.T
         n_dim = len(shape)
         batch = shape[0]
-        
-        x = torch.randn(shape).to(self.device) if seed is None else seed
-        if self.fb:
-                    x = self.fb.analysis(x)
 
-        for i in reversed(range(1, timesteps)):
+        if seed is None:
+            x = torch.randn(shape).to(self.device)
+            start_i = timesteps - 1
+        else:
+            start_i = seed_fwd_steps
+            if start_i >= timesteps:
+                x = torch.randn(shape).to(self.device)
+                start_i = timesteps - 1
+            elif start_i == 0:
+                x = seed
+            else:
+                t = torch.full((batch,), start_i, dtype=torch.long, device=self.device)
+                x = self.noise_data(seed, t)[0]
+
+        for i in reversed(range(1, start_i + 1)):
             t = torch.full((batch,), i, dtype=torch.long, device=self.device)
             with torch.no_grad():
                 pred_noise = model(x, t)
@@ -224,11 +227,9 @@ class Diffusion():
                 x = x + torch.sqrt(beta_t) * noise
 
         logger.info(f"Created {batch} samples")
-        if self.fb:
-            return self.fb.synthesis(x, shape[-1]).cpu().numpy(), x.cpu().numpy()
         return x.cpu().numpy()
     
-    def bwd_diffusion_ddim(self, model: nn.Module, shape: list, n_steps: int, eta: float = 0.0, seed: Tensor | None = None) -> ndarray:
+    def bwd_diffusion_ddim(self, model: nn.Module, shape: list, n_steps: int, eta: float = 0.0, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> np.ndarray:
         """Backward diffusion process for DDIM.
 
         Args:
@@ -237,9 +238,10 @@ class Diffusion():
             n_steps (int): The number of diffusion steps.
             eta (float, optional): The noise schedule. Defaults to 0.0.
             seed (Tensor | None, optional): The seed tensor for initialization. Defaults to None.
+            seed_fwd_steps (int, optional): Number of forward diffusion steps to take on the seed. Defaults to 0.
 
         Returns:
-            ndarray: The generated samples.
+            np.ndarray: The generated samples.
         """
         logger.info(f"Started sampling {shape[0]} samples on {self.device}")
         model.eval()
@@ -249,20 +251,31 @@ class Diffusion():
 
         timesteps_ind = torch.linspace(0, timesteps - 1, steps=n_steps, dtype=torch.long, device=self.device)
 
-        x = torch.randn(shape).to(self.device) if seed is None else seed
-        if self.fb:
-            x = self.fb.analysis(x)
-        
-        for i in reversed(range(1, n_steps)):
+        if seed is None:
+            x = torch.randn(shape).to(self.device)
+            start_i = n_steps - 1
+        else:
+            start_i = seed_fwd_steps
+            if start_i >= n_steps:
+                x = torch.randn(shape).to(self.device)
+                start_i = n_steps - 1
+            elif start_i == 0:
+                x = seed
+            else:
+                t = timesteps_ind[start_i]
+                t_tensor = torch.full((batch,), t, dtype=torch.long, device=self.device)
+                x = self.noise_data(seed, t_tensor)[0]
+
+        for i in reversed(range(1, start_i + 1)):
             t = timesteps_ind[i]
             t_prev = timesteps_ind[i - 1]
-
+            t_tensor = torch.full((batch,), t, dtype=torch.long, device=self.device)
+            with torch.no_grad():
+                pred_noise = model(x, t_tensor)
+            
             alpha_hat_t = self.alpha_hat[t]
             alpha_hat_prev = self.alpha_hat[t_prev]
-            t = torch.full((batch,), i, dtype=torch.long, device=self.device)
-            with torch.no_grad():
-                pred_noise = model(x, t)
-            
+
             sigma_t = eta * torch.sqrt((1 - alpha_hat_prev) / (1 - alpha_hat_t)) * torch.sqrt(1 - alpha_hat_t / alpha_hat_prev)
 
             x0_pred = (x - torch.sqrt(1 - alpha_hat_t) * pred_noise) / torch.sqrt(alpha_hat_t)
@@ -272,8 +285,6 @@ class Diffusion():
                 x += sigma_t * torch.randn_like(x)
         
         logger.info(f"Created {batch} samples")
-        if self.fb:
-            return self.fb.synthesis(x, shape[-1]).cpu().numpy(), x.cpu().numpy()
         return x.cpu().numpy()
     
     def bwd_diffusion_v_obj(self, model: nn.Module, shape: list, n_steps: int, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> ndarray:
@@ -284,7 +295,7 @@ class Diffusion():
             shape (list): The shape of the input tensor.
             n_steps (int): The number of diffusion steps.
             seed (Tensor | None, optional): The seed tensor for initialization. Defaults to None.
-
+            seed_fwd_steps (int): Number of fwd diffusiom steps to take on the seed.
         Returns:
             ndarray: The generated samples.
         """
@@ -299,10 +310,7 @@ class Diffusion():
             x = seed * a + b * torch.randn_like(seed)
             start_step = n_steps - seed_fwd_steps
         else:
-            if self.fb:
-                x = torch.randn((batch, self.fb.N, shape[-1]), device=self.device) 
-            else:
-                x = torch.randn(shape, device=self.device)
+            x = torch.randn(shape, device=self.device)
 
         for i in range(start_step, n_steps):
             sigma_t = sigmas[i]
@@ -322,6 +330,4 @@ class Diffusion():
             x = a1 * x_pred + b1 * noise_pred
 
         logger.info(f"Created {batch} samples")
-        if self.fb:
-            return self.fb.synthesis(x, shape[-1]).cpu().numpy(), x.cpu().numpy()
         return x.cpu().numpy()

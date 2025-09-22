@@ -846,7 +846,6 @@ class TrainingUtils():
             if n / key > 1:
                 n = round(n / key, 3)
                 return f"~{str(n)[:5]}{val}"
-
 ##############
 # Additional nn.Modules
 ##############
