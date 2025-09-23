@@ -2,44 +2,14 @@
 
 **How can I use generative AI to create music based on DJ sets as training data?**
 
-## Work Journal
-
-| Date       | Content              | Problems             |
-| :---       | :---                 | :---                 |
-| >21.02.2025 | Create a General Structure, with a Preprocessing, Train, Eval and Util files. Important Data Can be set in the Conf.py file. The processing creats n second splits and the converts those to STFT spectrograms.  | Using Linear Layers in the VAE will lead to too many Parameters when the VAE does not have a high compression rate. Therefore I implementet a convolutional bottleneck which drastically lowers parameter counts. |
-|>23.02.2025 | It seems that even though the results of the VAE got better, due too the Convolutional Architecture the Bottleneck has a very high dimensionality due to larg number of filters. And further Compression is not an option so due to the small size of my spectrograms Latent Diffusion seems to be impractical. Training in Paperspace of conv_VAE_v2 with batch size lr = 1-e4, batch = 32. >1000 epochs on dataset 640 and 1280, weight of reprod loss = 10'000. Reprod loss (*weight) = 1.9e5, KL = 4e4 | VAE does not seem to be the way to go, it induces too much noise and the error does not seem to get lower with lots of epochs. |
-| >03.03.2025 | I implemented the Diffusion and the corresponding UNET the first try was very unsuccesfull(Totally noisy output no characteristics whatsoever). Looking closer at the data it seems that UNET was implemented incorrectly with scaling the noise to 0-1 as last layer (Sigmoid) which prevented it from precisely predicting noise, furthermore i had to switch the training data interval to [-1 1] rather than [0, 1] as the noise added is of form N(0, I). Furthermore i added gradient scaling and mixed precision training with cuda and also the possibility to use gradient accumulation, as i can only train with batch size 8 due to the model having ~450k params. The second run started better, but the loss spiked at epoch 50 and didnt go down any furhter from that point on. Second training run also ends in no senseful data, noise too high but training seemed fine. | Optimize the model further to make it more memory efficient or upgrade and use bigger GPU's. Inference or sampling is also an issue atm as it takes 47 minutes to create a single Sample on my i7 CPU. |
-| >04.03.2025 | Refactoring the code to be based on the version by Outlier. Due to the increase in Model size i want to now generate bad quality audio and then later use a second neural net to upsample the audio. THis seems to be the state-of-the-art solution for big resolution outputs. | |
-| >05.03.2025 | Played around with preprocessing to create smaller data while still having the best possible quality. Switch sr to 32k(so 0-16k Hz). Tried mel spectrograms but due to the bad reconstruction and no significant increase in compression stayed with stft diagrams but modified fft_len=480 and hop_len=288. for 4 sec audio this gives me 93184 values rather than 688k for 8sec with the previous settings.| |
-| >06.03.2025 | Fixed a lot of small bugs and started traing more models, Switched the Attention layer due to complexity and param count for an SE block. THis did not seem to produce meaningful data therefore i switched to Double conv blocks instead of SE blocks. Also switched to a linear noise schedule as the cosine is not working somehow. | |
-| >07.03.2025 | Finally some output is generated it does not containg high contrast and is very noisy but a pattern can be seen. This was achieved by training with Conv_UNET, 1280 samples, 300 epochs (100 epochs/h). Also when training my ~17M param NN takes 10mins per epoch with batch 16, accum. of 2, when training with the full 7.8k samples| |
-| >09.03.2025 | The outputs seemd to have gotten better, but still with a bad output range. Which led me to taking a closer look at my data which got me to the realisation that my normalization might be bad and signle sample might differ a lot due to the normalization taking the min and max value of a whole set rather than the individual sample.||
-| >15.03.2025 | Tried another training run with other schedulers a higher Lr seemd to be beneficial getting down to ~0.08. Also switch to Batchnorm but this seemed to have lead to numerical instability during inference so i switched back to groupnorm with 8 groups. After run 1 switched from GELU to SiLU just to see if it would make a difference.  |  |
-| >17.03.2025 | I finally got to a loss >0.08 using manipulation in my unet and a custom lr scheduler. The model now has 72M params. Trained with 4000 samples on another smaller model 18M params | |
-| >20.03.2025 | Removed modulation and trying to get back to model v3 which produced some outputs.| |
-| >24.03.2025 | Added extra  Skip connection. Matching the implementation of Luke Ditra. This is now giving me some results again, seemingly training is not completely stable as after some epochs all highs seem to get removed but with low epoch counts the outputs are very noisy  | |
-| >23.04.2025 | Added more blocks and structures to the unet file, also created a new unet more based on the one proposed by Flavio schneider, but having size and memory issues there. ||
-| >28.04.2025 | Training on the cifar10 dataset now to test the architecture and also to compare the results to the unetV0 by Flavio schneider for Archisound. | |
-| >30.05.2025 | Implemented the Trainer class in untils which simplifies training of the eth diffusion. Also added gradient clipping to prevent numerical instability, helped partially still not stable but way better. ||
-| >01.06.2025 | Trying to get closer to the implemntation by Archisound/Mousai. Switched to Mel spectrograms, less bins more info, also switched to a 1D net where the frequency bins are used as channels speeding up computations significantly. Also strated with the vocoder implementation needed to convert a mel spectrogram back to a waveform. ||
-| >02.06.2025 | Getting wy better results with the standard diffusion process, loss of 9.4e-2. Butt missing a lot of temporal features such as longer notes. Also due to the change to mel spectrograms. A Vocoder would be needed to obtain a audio sample of the spectrograms. Therefore i switched to the Diffusion autoencoder as proposed in the Mousai paper. This takes way longer to train. 10mins per epcoh with 1000 samples. but in theory should yield better results and also acts as a vocoder so no second model is needed. Besides that there is some unclarity in the setup of the encoder as that is not mentioned in a paper so i'm just guessing which params go there. | |
-| >03.06.2025 | Trying to get the audioencoder to work, switch to the magnitude encoder like it was used in mousai, also contacted flavio schneider about the odd missmatch from encoder and inject.||
-| >07.06.2025 | Implemented MelGan to be able to convert mel to waveform. Getting results, but still very noisy. | |
-| >10.06.2025 | Getting some results. Trying to optimize hyperparams using optuna. sevcondly trying to train an upsampler for the diffusion model. | |
-| >17.06.2025 | Implemented HiFiGAN which gets me better results as melGAN trying to train the diffusion more to produce better spectrograms and also trying to train an enhancer working on the waveform for HiFiGAN to possibly remove the current aliasing. | |
-| >06.07.2025 | tried the same models using the maestro dataset to rule out dataset issues. This resulted in even worse outputs.| Will refactor the utils code so it is more sorted so will create a tag at this stage if older files want to be tested. |
-| >10.08.2025 | Some diffusion tests with Audiodiffusion Pytorch| |
-| >25.08.2025 | VAE, VQ-VAE + Transformer| |
-| >04.09.2025 | Wave Diffusion | |
-| >04.09.2025 | 2h Architecture Diagram | |
-
 ## General Info
 
 ### Directory Details
 
-- **Data**
-  - `datasets.npy` - Preprocessed dataset file
-  - `music_file.wav` - Example audio file for processing.
+- **Files And Results**
+  - **Test Data** - Selection of Samples from the test set.
+  - **Training Data** - Selection of Files from the training set.
+  - **Model/Type Name** - Results from different methods/models.
 
 - **Libraries**
   - `Utils.py` - General utility functions and the Trainer class for the newer models.
@@ -52,10 +22,7 @@
   - `Wave Diffusion Inference.ipynb` - Notebook for generating samples using diffusion and also to save the model architecture.
 
 - **Models**
-  - Directory for saved model weights (e.g., `.pth` files).
-
-- **Results**
-  - Directory for experiment results and outputs.
+  - Directory for saved model weights (e.g., `.pth` files). Contains the weights of the last models only.
 
 ### Prerequisits
 
@@ -68,6 +35,8 @@
   - `Librosa`: 0.10.2 (Depending on the python version might require `standard-sunau`, `standard-aifc` and `standard-chunk` which have been removed from the pre-installed libraries in newer python versions.)
   - `Matplotlib`: 3.10.0
   - `Soundfile`: 0.13.1
+  - `optuna`: 4.3.0
+  - `plotly`: 6.1.2
   - **Optional**
     - `tensorboard`: 2.19.0
     - `torchviz`: 0.0.3
@@ -82,22 +51,11 @@
 
 ### Logging
 
-This codebase is based on the logging module. For the minimal output set logging level to `logging.INFO`. Due to the immense output of some libraries in `logging.DEBUG` mode i added a custom mode between `DEBUG` and `INFO`. Inorder to use this level which prints a lot of info in the custom implemented functions set debug level to `LIGHT_DEBUG`. This is defined in the `conf.py` file.
-
-### Data
-
-The dataset is created in the preprocessing file. The Model is trained on 4.096s mono samples with a sample rate of 32Khz.
+This codebase is based on the logging module. For the minimal output set logging level to `logging.INFO`. Due to the immense output of some libraries in the `logging.DEBUG` mode I added a custom mode between `DEBUG` and `INFO`. Inorder to use this level which debugs the custom impelemented functions, set debug level to `LIGHT_DEBUG`.
 
 ## Sources
 
-### Papers
-
-- [Original DDPM Paper(Sohl-Dickstein et. al 2015)](http://arxiv.org/pdf/1503.03585)
-- [DDPM(Ho et. al 2020)](https://arxiv.org/pdf/2006.11239) (This is the most useful one and the one most of my implementation is based on).
-- [Improved DDPM(Nichol et. al 2021)](https://arxiv.org/pdf/2102.09672) (Explanation of cosine schedule).
-- [DDIM(Song et. al 2022)](https://arxiv.org/pdf/2010.02502) (The faster generation method).
-- [Diffusion for music gen. ETH (Flavio Schneider 2023)](https://arxiv.org/pdf/2301.13267) (A good overview over methods).
-- [Moûsai: Efficient Text-to-Music Diffusion Models (Flavio Schneider et. al 2023)](https://arxiv.org/pdf/2301.11757) (Discrete implementations of the methods proposed in the Diffusion paper by Flavio Schneider)
+Some Additional Sources and learning resources not mentioned in the main Paper.
 
 ### Youtube Videos
 
@@ -106,3 +64,39 @@ The dataset is created in the preprocessing file. The Model is trained on 4.096s
 - [Explanation by ExplainingAI](https://www.youtube.com/watch?v=H45lF4sUgiE)
 - [Implemtation by ExplainingAI](https://www.youtube.com/watch?v=vu6eKteJWew)
 - [Explanation UNET by rupert ai](https://www.youtube.com/watch?v=NhdzGfB1q74)
+
+## Work Journal
+
+| Date       | Content              | Problems             | Next Steps           | Time Spent (Training and MA paper writing times not included) |
+| :---       | :---                 | :---                 | :---                 | :---       |
+| >21.02.2025 | Created a general structure with Preprocessing, Train, Eval and Util files. Configurations set in `conf.py`. Processing creates *n*-second splits and converts them to STFT spectrograms. | Using linear layers in the VAE led to too many parameters when compression rate was low. Implemented a convolutional bottleneck, which drastically lowered parameter count. | Test if bottleneck still captures enough structure for music data. | 7h |
+| >23.02.2025 | Convolutional bottleneck improved results, but latent dimensionality too high due to large number of filters. Further compression not feasible with small spectrograms. Training conv_VAE_v2 on Paperspace (lr=1e-4, batch=32, >1000 epochs, dataset 640/1280). Reprod loss (*weight)=1.9e5, KL=4e4. | VAE induces too much noise. Loss plateaued even after many epochs. Latent diffusion seems impractical at this resolution. | Consider abandoning VAE path for audio and testing alternatives. | 5h |
+| >03.03.2025 | Implemented diffusion + UNet. First try failed (pure noise). Found issues: UNet used Sigmoid output, wrong for noise prediction; dataset scaled to [0,1] instead of [-1,1]. Fixed both. Added gradient scaling, mixed precision training, gradient accumulation (batch=8, ~450k params). Second run started better, but loss spiked at epoch 50 and didn’t recover. | Output still unusable. Sampling extremely slow (47 min/sample on CPU). | Optimize UNet for efficiency, test smaller models, or switch to bigger GPU. | 6h15 |
+| >04.03.2025 | Refactored code based on Outlier’s implementation. Decided to generate lower-quality audio first, then upsample with a second model (SOTA approach for high resolution). | Scaling up increases memory usage. | Plan secondary neural net for upsampling. | 4h15 |
+| >05.03.2025 | Adjusted preprocessing: switched sr=32k (0–16kHz). Tested mel spectrograms but reconstruction poor → stayed with STFT. Changed fft_len=480, hop_len=288. 4s audio now ~93k values instead of 688k for 8s. | Mel failed for music reconstruction. | Continue tuning STFT params for balance between quality and size. | 4h30 |
+| >06.03.2025 | Fixed bugs, trained more models. Replaced attention with SE blocks (too heavy), then switched to double conv blocks. Changed cosine noise schedule to linear (cosine unstable). | SE blocks underperformed. Cosine schedule broke training. | Keep testing noise schedules + block designs. | 3h |
+| >07.03.2025 | First noisy but structured outputs using Conv_UNet. Trained on 1280 samples, 300 epochs (~100 epochs/h). ~17M param NN takes ~10min/epoch (batch=16, accum=2). | Outputs low-contrast and noisy. | Explore normalization + loss tweaks. | 1h30 |
+| >09.03.2025 | Output improved slightly but still poor range. Found normalization bug: used dataset-level min/max instead of per-sample, causing big inconsistencies. | Wrong normalization distorted training signal. | Fix normalization to per-sample scaling. | 2h30 |
+| >15.03.2025 | Tried schedulers with higher lr (~0.08) → beneficial. Switched to BatchNorm, caused instability → reverted to GroupNorm(8). Tested GELU vs SiLU. | Inference unstable with BatchNorm. | Stick with GroupNorm, keep SiLU. | 2h45 |
+| >17.03.2025 | Reached loss ~0.08 with UNet tweaks + custom lr scheduler. 72M param model + smaller 18M variant trained on 4k samples. | Large model is memory-heavy. | Optimize for GPU memory (checkpointing, mixed precision). | 5h30 |
+| >20.03.2025 | Removed modulation layers, returned to model v3 (previously worked better). | Performance degraded after removing features. | Re-assess which features are critical. | 4h |
+| >24.03.2025 | Added extra skip connections (Luke Ditra style). Training unstable: after some epochs highs vanish; with few epochs outputs noisy. | Instability across epochs. | Add early stopping, test other loss weights. | 3h |
+| >23.04.2025 | Expanded UNet with more blocks. Created new version based on Flavio Schneider’s design. Hit size and memory issues. | Out-of-memory with big UNet. | Reduce block depth or add efficient layers. | 11h |
+| >28.04.2025 | Training on CIFAR-10 to benchmark against UNetV0 (Flavio Schneider, Archisound). | Image results ≠ audio, risk of mismatch. | Compare architectures on both audio + CIFAR. | 1h |
+| >30.05.2025 | Added Trainer class in utils → cleaner training loop. Added gradient clipping, partially stabilized training. | Still some instability, clipping not a full fix. | Add lr warmup/cosine restarts. | 13h |
+| >01.06.2025 | Moving closer to Archisound/Mousai. Switched to mel spectrograms with fewer bins, treated frequency bins as channels (1D net) → faster. Started vocoder implementation for mel→waveform. | Vocoder not yet functional. | Implement/test HiFiGAN. | 5h |
+| >02.06.2025 | Better results with plain diffusion (loss=9.4e-2) but temporal features missing. Switched to diffusion autoencoder (Mousai). Slower: 10min/epoch @1k samples. Encoder setup unclear (paper underspecified). | Temporal coherence lacking. Encoder params unknown. | Reproduce encoder setup from Mousai or experiment. | 2h45 |
+| >03.06.2025 | Switched to magnitude encoder (like Mousai). Contacted Flavio Schneider about encoder mismatch → no response. | Encoder setup still unclear. | Keep testing variants. | 5h |
+| >07.06.2025 | Implemented MelGAN vocoder. Produced waveform but very noisy. | MelGAN quality poor. | Replace with HiFiGAN. | 3h |
+| >10.06.2025 | Getting results. Hyperparam tuning with Optuna. Training upsampler for diffusion outputs. | Noisy results. | Continue Optuna search. | 5h |
+| >17.06.2025 | Implemented HiFiGAN. Better than MelGAN. Training diffusion to output better spectrograms. Also training HiFiGAN enhancer to reduce aliasing. | Alias artifacts remain. | Tune HiFiGAN enhancer further. | 5h |
+| >06.07.2025 | Tested models on Maestro dataset to rule out dataset issues → results worse. Started writing matura paper. | Dataset dependency unclear. | Refactor utils, create git tag for reproducibility. | 5h |
+| >10.08.2025 | Tested AudioDiffusion PyTorch with Optuna. No good results. | Parameters not optimal. | Deeper tuning. | 10h |
+| >20.08.2025 | Implemented VQ-VAE. Training + inference reconstructions ok. Built simple transformer, only ~10% accuracy, unusable outputs. | Likely bad token representation or dataset→token conversion bug. | Debug tokenizer + try continuous latent spaces. | 5h|
+| >25.08.2025 | VQ-VAE + Transformer (fixed conversion bug). Accuracy ~15%, outputs still poor. Switched to continuous VAE. VAE samples collapse, KL loss balancing hard. Latent diffusion not viable if latent space bad. | Latent space collapse. Poor recon quality. | Tune KL weight, try β-VAE or VQ fallback. | 3h30 |
+| >07.09.2025 | Reimplemented Wave Diffusion with v-objective. Fixed earlier formula errors. Increased receptive field, improved UNet (res blocks). Promising results (low freq captured, no highs). | High frequency info missing. | Add multi-band diffusion or frequency loss. | 16h15 |
+| >08.09.2025 | Tried band-split diffusion. No success. Added band-weighted loss, which improved outputs. | Band diffusion ineffective. | Keep band-weighted loss. | 2h |
+| >18.09.2025 | Created architecture diagram for Diffusion v6 (draw.io).  | | | 4h |
+| >23.09.2025 | Wrote algorithm overview/pseudocode in LaTeX for all diffusion models. Made graphics for matura paper. Cleared up code files and added samples to github. | | | 5h15 |
+
+The practical part of the project (excluding model training) took roughly 130 hours. Writing the thesis probably took 60–80 hours, though this is just an estimate since I often wrote in short sessions, so exact timing is hard to track.
