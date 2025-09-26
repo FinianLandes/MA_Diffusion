@@ -674,15 +674,15 @@ class TrainingUtils():
         """
         return nn.functional.mse_loss(a, b).item()
 
-    def snr_db(self, ref: Tensor, est: Tensor) -> float:
-        """Compute the Signal-to-Noise Ratio (SNR) in dB.
+    def reprod_quality_db(self, ref: Tensor, est: Tensor) -> float:
+        """Compute the Signal-to-Noise Ratio (reprod_quality) in dB.
 
         Args:
             ref (Tensor): The reference (clean) audio signal.
             est (Tensor): The estimated (noisy) audio signal.
 
         Returns:
-            float: The SNR in dB.
+            float: The reprod_quality in dB.
         """
 
         num = torch.sum(ref.float() ** 2).item()
@@ -732,29 +732,29 @@ class TrainingUtils():
             x0_from_true_v = (a * eps_from_true_v - true_v) / b
 
             mse_eps_rec = self.mse(eps_from_true_v, eps_true)
-            snr_eps_rec = self.snr_db(eps_true, eps_from_true_v)
+            reprod_quality_eps_rec = self.reprod_quality_db(eps_true, eps_from_true_v)
             mse_x0_true = self.mse(x0_from_true_v, audio_input)
-            snr_x0_true = self.snr_db(audio_input, x0_from_true_v)
+            reprod_quality_x0_true = self.reprod_quality_db(audio_input, x0_from_true_v)
 
-            logger.info(f"eps recovery from true_v -> MSE={mse_eps_rec:.4e}, SNR={snr_eps_rec:.2f} dB")
-            logger.info(f"x0 recovery from true_v -> MSE={mse_x0_true:.4e}, SNR={snr_x0_true:.2f} dB")
+            logger.info(f"eps recovery from true_v -> MSE={mse_eps_rec:.4e}, reprod_quality={reprod_quality_eps_rec:.2f} dB")
+            logger.info(f"x0 recovery from true_v -> MSE={mse_x0_true:.4e}, reprod_quality={reprod_quality_x0_true:.2f} dB")
 
             with torch.no_grad():
                 pred_v = u_net(x_sigma, sigma_b)
 
             mse_v = self.mse(pred_v, true_v)
-            snr_v = self.snr_db(true_v, pred_v)
+            reprod_quality_v = self.reprod_quality_db(true_v, pred_v)
             eps_from_pred_v = (pred_v + b * audio_input) / a
             x0_from_pred_v = (a * eps_from_pred_v - pred_v) / b
 
             mse_eps_pred = self.mse(eps_from_pred_v, eps_true)
-            snr_eps_pred = self.snr_db(eps_true, eps_from_pred_v)
+            reprod_quality_eps_pred = self.reprod_quality_db(eps_true, eps_from_pred_v)
             mse_x0_pred = self.mse(x0_from_pred_v, audio_input)
-            snr_x0_pred = self.snr_db(audio_input, x0_from_pred_v)
+            reprod_quality_x0_pred = self.reprod_quality_db(audio_input, x0_from_pred_v)
 
-            logger.info(f"pred_v vs true_v -> MSE={mse_v:.4e}, SNR={snr_v:.2f} dB")
-            logger.info(f"eps from pred_v -> MSE={mse_eps_pred:.4e}, SNR={snr_eps_pred:.2f} dB")
-            logger.info(f"x0 from pred_v -> MSE={mse_x0_pred:.4e}, SNR={snr_x0_pred:.2f} dB")
+            logger.info(f"pred_v vs true_v -> MSE={mse_v:.4e}, reprod_quality={reprod_quality_v:.2f} dB")
+            logger.info(f"eps from pred_v -> MSE={mse_eps_pred:.4e}, reprod_quality={reprod_quality_eps_pred:.2f} dB")
+            logger.info(f"x0 from pred_v -> MSE={mse_x0_pred:.4e}, reprod_quality={reprod_quality_x0_pred:.2f} dB")
 
             sigma_next = max(0.0, sigma_val - 0.01)
             sigma_next_b = torch.full((B,), sigma_next, device=diffusion.device)
@@ -766,15 +766,15 @@ class TrainingUtils():
 
             diagnostics[sigma_val] = {
                 "mse_eps_rec_true": mse_eps_rec,
-                "snr_eps_rec_true": snr_eps_rec,
+                "reprod_quality_eps_rec_true": reprod_quality_eps_rec,
                 "mse_x0_true": mse_x0_true,
-                "snr_x0_true": snr_x0_true,
+                "reprod_quality_x0_true": reprod_quality_x0_true,
                 "mse_v": mse_v,
-                "snr_v": snr_v,
+                "reprod_quality_v": reprod_quality_v,
                 "mse_eps_pred": mse_eps_pred,
-                "snr_eps_pred": snr_eps_pred,
+                "reprod_quality_eps_pred": reprod_quality_eps_pred,
                 "mse_x0_pred": mse_x0_pred,
-                "snr_x0_pred": snr_x0_pred,
+                "reprod_quality_x0_pred": reprod_quality_x0_pred,
                 "mse_xnext": mse_step
             }
 
