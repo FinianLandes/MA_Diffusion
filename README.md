@@ -21,8 +21,7 @@
   - `Wave Diffusion.ipynb` - Notebook for traing the diffusion models.
   - `Wave Diffusion Inference.ipynb` - Notebook for generating samples using diffusion and also to save the model architecture.
 
-- **Models**
-  - Directory for saved model weights (e.g., `.pth` files). Contains the weights of the last models only.
+The model weights for the final model can be found at: [Wave Diffusion v6](https://huggingface.co/Chaerne/DirectWaveDiffusion_v6/blob/main/WaveDiffusion_v6.pth)
 
 ### Prerequisits
 
