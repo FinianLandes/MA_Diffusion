@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class Diffusion():
-    def __init__(self, noise_steps: int, schedule: str = "cosine", inp_shape: list = [12, 1, 262144], device: str = "cpu") -> None:
+    def __init__(self, noise_steps: int, schedule: str = "cosine", inp_shape: list = [12, 1, 131072], device: str = "cpu") -> None:
         """Diffusion Class containing all the functions necessary for diffusion models.
 
         Args:
@@ -177,7 +177,7 @@ class Diffusion():
         true_vel = a * e - b * inp
         return true_vel, x_sigma_t, sigma_t
 
-    def bwd_diffusion_ddpm(self, model: nn.Module, shape: list, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> np.ndarray:
+    def bwd_diffusion_ddpm(self, model: nn.Module, shape: list, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> ndarray:
         """Backward diffusion process for DDPM.
 
         Args:
@@ -187,7 +187,7 @@ class Diffusion():
             seed_fwd_steps (int, optional): Number of forward diffusion steps to take on the seed. Defaults to 0.
 
         Returns:
-            np.ndarray: The generated samples.
+            ndarray: The generated samples.
         """
         logger.info(f"Started sampling {shape[0]} samples on {self.device}")
         
@@ -229,7 +229,7 @@ class Diffusion():
         logger.info(f"Created {batch} samples")
         return x.cpu().numpy()
     
-    def bwd_diffusion_ddim(self, model: nn.Module, shape: list, n_steps: int, eta: float = 0.0, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> np.ndarray:
+    def bwd_diffusion_ddim(self, model: nn.Module, shape: list, n_steps: int, eta: float = 0.0, seed: Tensor | None = None, seed_fwd_steps: int = 0) -> ndarray:
         """Backward diffusion process for DDIM.
 
         Args:
@@ -241,7 +241,7 @@ class Diffusion():
             seed_fwd_steps (int, optional): Number of forward diffusion steps to take on the seed. Defaults to 0.
 
         Returns:
-            np.ndarray: The generated samples.
+            ndarray: The generated samples.
         """
         logger.info(f"Started sampling {shape[0]} samples on {self.device}")
         model.eval()
@@ -305,7 +305,7 @@ class Diffusion():
         batch = shape[0]
         sigmas = torch.linspace(1.0, 0.0, n_steps + 1, device=self.device)
         start_step = 0
-        if seed is not None:
+        if seed is not None: # Fwd diffusion
             a, b = self.get_semicircle_weights(sigmas[n_steps - seed_fwd_steps])
             x = seed * a + b * torch.randn_like(seed)
             start_step = n_steps - seed_fwd_steps
@@ -320,14 +320,14 @@ class Diffusion():
             sigma_tp1_b = torch.full((batch,), sigma_tp1, device=self.device)
 
             with torch.no_grad():
-                v_pred = model(x, sigma_t_b)
+                v_pred = model(x, sigma_t_b) # Predict next timestep
 
             a, b = self.get_semicircle_weights(sigma_t_b)
             a1, b1 = self.get_semicircle_weights(sigma_tp1_b)
 
             x_pred = a * x - b * v_pred
             noise_pred = b * x + a * v_pred
-            x = a1 * x_pred + b1 * noise_pred
+            x = a1 * x_pred + b1 * noise_pred # Clalculate next step
 
         logger.info(f"Created {batch} samples")
         return x.cpu().numpy()

@@ -1,8 +1,45 @@
-# MA_DDPM
+# MA Diffusion
 
 **How can I use generative AI to create music based on DJ sets as training data?**
 
 ## General Info
+
+### Usage
+
+To reproduce results or experiment with the models yourself:
+
+1. **Clone the repository**
+   - **Option 1: Clone with Git**
+
+     ``` bash
+     git clone https://github.com/FinianLandes/MA_Diffusion.git
+     cd MA_Diffusion
+     ```
+
+   - **Option 2: Download as ZIP**
+     - Go to the repository page: [MA_Diffusion](https://github.com/FinianLandes/MA_Diffusion)
+     - Click the green **Code** button → **Download ZIP**
+     - Extract the ZIP file on your computer and open the folder in your IDE (e.g., VS Code or Jupyter).
+
+2. **Install dependencies**
+  Install the required dependencies as listed below.
+
+3. **Preprocess your dataset**
+    Open and run `Preprocessing.ipynb`.
+    Adjust input/output directories in the first cell to match your audio files.
+    (You can skip this step if you only want to run the pretrained model.)
+
+4. **Train a model**
+    Open `Wave Diffusion.ipynb`.
+    Set parameters (epochs, batch size, etc.) in the configuration cell.
+    Run all cells to start training, you can also continue to train a pretrained model with your data.
+    (Model checkpoints are automatically saved, with the current epoch and deleted if training successfully finishes.)
+    (You can skip this step if you only want to run the pretrained model.)
+
+5. **Generate samples**
+    Use Wave Diffusion `Inference.ipynb`.
+    Load the trained weights (e.g. WaveDiffusion_v6.pth) or your own model.
+    Run the generation cells to produce and listen to new 4-second audio samples.
 
 ### Directory Details
 
@@ -34,12 +71,12 @@ The model weights for the final model can be found at: [Wave Diffusion v6](https
   - `Librosa`: 0.10.2 (Depending on the python version might require `standard-sunau`, `standard-aifc` and `standard-chunk` which have been removed from the pre-installed libraries in newer python versions.)
   - `Matplotlib`: 3.10.0
   - `Soundfile`: 0.13.1
-  - `optuna`: 4.3.0
-  - `plotly`: 6.1.2
   - **Optional**
     - `tensorboard`: 2.19.0
     - `torchviz`: 0.0.3
     - `torchinfo`: 1.8.0
+    - `optuna`: 4.3.0
+    - `plotly`: 6.1.2
 
 - **Pre-Installed Libraries**
   - `os`
@@ -58,10 +95,10 @@ Some Additional Sources and learning resources not mentioned in the main Paper.
 
 ### Youtube Videos
 
-- [Paper explanation by Outlier](https://www.youtube.com/watch?v=HoKDTa5jHvg)
-- [Implementation by Outlier](https://www.youtube.com/watch?v=TBCRlnwJtZU)
-- [Explanation by ExplainingAI](https://www.youtube.com/watch?v=H45lF4sUgiE)
-- [Implemtation by ExplainingAI](https://www.youtube.com/watch?v=vu6eKteJWew)
+- [Diffusion paper explanation by Outlier](https://www.youtube.com/watch?v=HoKDTa5jHvg)
+- [Diffusion implementation by Outlier](https://www.youtube.com/watch?v=TBCRlnwJtZU)
+- [Diffusion explanation by ExplainingAI](https://www.youtube.com/watch?v=H45lF4sUgiE)
+- [Diffusion implemtation by ExplainingAI](https://www.youtube.com/watch?v=vu6eKteJWew)
 - [Explanation UNET by rupert ai](https://www.youtube.com/watch?v=NhdzGfB1q74)
 
 ## Work Journal
