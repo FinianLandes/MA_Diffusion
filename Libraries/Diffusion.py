@@ -327,7 +327,7 @@ class Diffusion():
 
             x_pred = a * x - b * v_pred
             noise_pred = b * x + a * v_pred
-            x = a1 * x_pred + b1 * noise_pred # Clalculate next step
+            x = a1 * x_pred + b1 * noise_pred # Calculate next step
 
         logger.info(f"Created {batch} samples")
         return x.cpu().numpy()

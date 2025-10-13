@@ -25,6 +25,7 @@ To reproduce results or experiment with the models yourself:
   Install the required dependencies as listed below.
 
 3. **Preprocess your dataset**
+    In all files set ```remote_kernel = False``` if you are running on your local machine.
     Open and run `Preprocessing.ipynb`.
     Adjust input/output directories in the first cell to match your audio files.
     (You can skip this step if you only want to run the pretrained model.)
